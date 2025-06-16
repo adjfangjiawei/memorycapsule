@@ -1,11 +1,10 @@
 Starting Clang-Tidy analysis...
+--- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Protocol/BoltProtocol/Example/server_example.cpp ---
+/media/root/newvolumn/fjw/memorycapsule/Base/Protocol/BoltProtocol/Example/server_example.cpp:359:49: error: unknown type name 'TelemetryMessageParams' [clang-diagnostic-error]
+----------------------------------------
 --- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Protocol/BoltProtocol/Source/handshake.cpp ---
 /media/root/newvolumn/fjw/memorycapsule/Base/Protocol/BoltProtocol/Source/handshake.cpp:25:22: warning: Value stored to 'version_int_host' during its initialization is never read [clang-analyzer-deadcode.DeadStores]
 /media/root/newvolumn/fjw/memorycapsule/Base/Protocol/BoltProtocol/Source/handshake.cpp:25:22: note: Value stored to 'version_int_host' during its initialization is never read
-----------------------------------------
---- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Protocol/BoltProtocol/Example/client_example.cpp ---
-/media/root/newvolumn/fjw/memorycapsule/Base/Protocol/BoltProtocol/Example/client_example.cpp:294:15: error: use of undeclared identifier 'serialize_begin_message' [clang-diagnostic-error]
-/media/root/newvolumn/fjw/memorycapsule/Base/Protocol/BoltProtocol/Example/client_example.cpp:544:15: error: use of undeclared identifier 'serialize_commit_message'; did you mean 'serialize_reset_message'? [clang-diagnostic-error]
 ----------------------------------------
 --- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/CppOrm/Source/builder_parts/query_builder_helpers.cpp ---
 /media/root/newvolumn/fjw/memorycapsule/Base/CppOrm/Source/builder_parts/query_builder_helpers.cpp:182:5: warning: Value stored to 'any_user_condition_written' is never read [clang-analyzer-deadcode.DeadStores]
