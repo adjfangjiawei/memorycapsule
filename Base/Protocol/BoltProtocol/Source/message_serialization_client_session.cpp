@@ -1,7 +1,7 @@
 #include <exception>
 #include <map>
 #include <memory>
-#include <optional>  // For std::optional
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -22,53 +22,29 @@ namespace boltprotocol {
             extra_map_sptr = std::make_shared<BoltMap>();
             auto& pairs = extra_map_sptr->pairs;
 
-            // User agent (always present)
             pairs.emplace("user_agent", Value(params.user_agent));
 
-            // Authentication fields (if Bolt < 5.1 or for INIT message semantics if client_target_version indicates that)
-            // Client needs to decide based on its target protocol version strategy.
-            // If targeting Bolt 5.1+, these auth fields should be in LOGON.
-            bool use_auth_in_hello = (client_target_version.major < 5) || (client_target_version.major == 5 && client_target_version.minor < 1);
+            bool use_auth_in_hello = (client_target_version < versions::V5_1);  // Qualified comparison
 
             if (use_auth_in_hello) {
-                if (params.auth_scheme.has_value()) {
-                    pairs.emplace("scheme", Value(params.auth_scheme.value()));
-                }
-                if (params.auth_principal.has_value()) {
-                    pairs.emplace("principal", Value(params.auth_principal.value()));
-                }
-                if (params.auth_credentials.has_value()) {
-                    pairs.emplace("credentials", Value(params.auth_credentials.value()));
-                }
+                if (params.auth_scheme.has_value()) pairs.emplace("scheme", Value(params.auth_scheme.value()));
+                if (params.auth_principal.has_value()) pairs.emplace("principal", Value(params.auth_principal.value()));
+                if (params.auth_credentials.has_value()) pairs.emplace("credentials", Value(params.auth_credentials.value()));
                 if (params.auth_scheme_specific_tokens.has_value()) {
                     for (const auto& token_pair : params.auth_scheme_specific_tokens.value()) {
-                        pairs.emplace(token_pair.first, token_pair.second);  // Copy Value
+                        pairs.emplace(token_pair.first, token_pair.second);
                     }
                 }
-            } else {
-                // For Bolt 5.1+, if these fields are provided in HelloMessageParams, it's a misuse by caller.
-                // Could add a warning or error here, or assume caller knows what they're doing.
-                // For now, we just don't serialize them into HELLO if targeting 5.1+.
             }
 
-            // Routing context (Bolt 4.1+)
             if (client_target_version.major > 4 || (client_target_version.major == 4 && client_target_version.minor >= 1)) {
                 if (params.routing_context.has_value()) {
-                    // The routing context itself is a map. It's wrapped in a Value.
                     auto routing_map_val_sptr = std::make_shared<BoltMap>();
                     routing_map_val_sptr->pairs = params.routing_context.value();
                     pairs.emplace("routing", Value(routing_map_val_sptr));
-                } else {
-                    // Per spec, if routing key is present with null value, server should not carry out routing.
-                    // If key is absent, server uses default. If client wants to explicitly disable routing,
-                    // it should send {"routing": null}.
-                    // We can choose to always send "routing": null if params.routing_context is not set,
-                    // or omit the "routing" key entirely. Omitting is simpler if no explicit disable is intended.
-                    // If an explicit `{"routing": null}` is desired, params.routing_context should contain that.
                 }
             }
 
-            // Patch Bolt (Bolt 4.3 - 4.4)
             if (client_target_version.major == 4 && (client_target_version.minor == 3 || client_target_version.minor == 4)) {
                 if (params.patch_bolt.has_value() && !params.patch_bolt.value().empty()) {
                     auto patch_list_sptr = std::make_shared<BoltList>();
@@ -79,7 +55,6 @@ namespace boltprotocol {
                 }
             }
 
-            // Notification configuration (Bolt 5.2+)
             if (client_target_version.major > 5 || (client_target_version.major == 5 && client_target_version.minor >= 2)) {
                 if (params.notifications_min_severity.has_value()) {
                     pairs.emplace("notifications_minimum_severity", Value(params.notifications_min_severity.value()));
@@ -93,27 +68,12 @@ namespace boltprotocol {
                 }
             }
 
-            // Bolt Agent information (Bolt 5.3+, mandatory)
             bool bolt_agent_mandatory = (client_target_version.major > 5 || (client_target_version.major == 5 && client_target_version.minor >= 3));
             if (bolt_agent_mandatory) {
                 if (!params.bolt_agent.has_value() || params.bolt_agent.value().product.empty()) {
-                    writer.set_error(BoltError::SERIALIZATION_ERROR);  // Bolt agent product is mandatory
+                    writer.set_error(BoltError::SERIALIZATION_ERROR);
                     return BoltError::SERIALIZATION_ERROR;
                 }
-                auto bolt_agent_map_sptr = std::make_shared<BoltMap>();
-                const auto& agent_info = params.bolt_agent.value();
-                bolt_agent_map_sptr->pairs.emplace("product", Value(agent_info.product));
-                if (agent_info.platform.has_value()) {
-                    bolt_agent_map_sptr->pairs.emplace("platform", Value(agent_info.platform.value()));
-                }
-                if (agent_info.language.has_value()) {
-                    bolt_agent_map_sptr->pairs.emplace("language", Value(agent_info.language.value()));
-                }
-                if (agent_info.language_details.has_value()) {
-                    bolt_agent_map_sptr->pairs.emplace("language_details", Value(agent_info.language_details.value()));
-                }
-                pairs.emplace("bolt_agent", Value(bolt_agent_map_sptr));
-            } else if (params.bolt_agent.has_value()) {  // Optional if not mandatory, serialize if provided
                 auto bolt_agent_map_sptr = std::make_shared<BoltMap>();
                 const auto& agent_info = params.bolt_agent.value();
                 bolt_agent_map_sptr->pairs.emplace("product", Value(agent_info.product));
@@ -121,16 +81,19 @@ namespace boltprotocol {
                 if (agent_info.language.has_value()) bolt_agent_map_sptr->pairs.emplace("language", Value(agent_info.language.value()));
                 if (agent_info.language_details.has_value()) bolt_agent_map_sptr->pairs.emplace("language_details", Value(agent_info.language_details.value()));
                 pairs.emplace("bolt_agent", Value(bolt_agent_map_sptr));
+            } else if (params.bolt_agent.has_value()) {
+                auto bolt_agent_map_sptr = std::make_shared<BoltMap>();
+                const auto& agent_info = params.bolt_agent.value();
+                bolt_agent_map_sptr->pairs.emplace("product", Value(agent_info.product));  // Product is mandatory in BoltAgentInfo itself
+                if (agent_info.platform.has_value()) bolt_agent_map_sptr->pairs.emplace("platform", Value(agent_info.platform.value()));
+                if (agent_info.language.has_value()) bolt_agent_map_sptr->pairs.emplace("language", Value(agent_info.language.value()));
+                if (agent_info.language_details.has_value()) bolt_agent_map_sptr->pairs.emplace("language_details", Value(agent_info.language_details.value()));
+                pairs.emplace("bolt_agent", Value(bolt_agent_map_sptr));
             }
 
-            // Other custom tokens
             for (const auto& token_pair : params.other_extra_tokens) {
-                // Be careful not to overwrite keys already set by specific fields above.
-                // emplace only inserts if key doesn't exist. Use insert_or_assign or check first if overwrite is possible/intended.
-                // For simplicity, assuming other_extra_tokens don't clash with standard keys.
                 pairs.emplace(token_pair.first, token_pair.second);
             }
-
             pss_hello_obj.fields.emplace_back(Value(extra_map_sptr));
 
         } catch (const std::bad_alloc&) {
@@ -158,9 +121,6 @@ namespace boltprotocol {
         }
         return writer.write(Value(std::move(pss_sptr)));
     }
-
-    // serialize_goodbye_message and serialize_reset_message remain unchanged from their previous location.
-    // They are simple and don't depend on HelloMessageParams changes.
 
     BoltError serialize_goodbye_message(PackStreamWriter& writer) {
         if (writer.has_error()) return writer.get_error();
@@ -202,7 +162,6 @@ namespace boltprotocol {
         return writer.write(Value(std::move(pss_sptr)));
     }
 
-    // Implementations for serialize_logon_message and serialize_logoff_message will go here
     BoltError serialize_logon_message(const LogonMessageParams& params, PackStreamWriter& writer) {
         if (writer.has_error()) return writer.get_error();
 
@@ -212,7 +171,8 @@ namespace boltprotocol {
         std::shared_ptr<BoltMap> auth_map_sptr;
         try {
             auth_map_sptr = std::make_shared<BoltMap>();
-            auth_map_sptr->pairs = params.auth_tokens;  // map copy
+            // The auth_tokens map in LogonMessageParams directly becomes the PSS field.
+            auth_map_sptr->pairs = params.auth_tokens;
 
             pss_logon_obj.fields.emplace_back(Value(auth_map_sptr));
 
@@ -247,7 +207,7 @@ namespace boltprotocol {
         try {
             pss_sptr = std::make_shared<PackStreamStructure>();
             pss_sptr->tag = static_cast<uint8_t>(MessageTag::LOGOFF);
-            // LOGOFF has no fields in its PSS
+            // LOGOFF PSS has no fields.
         } catch (const std::bad_alloc&) {
             writer.set_error(BoltError::OUT_OF_MEMORY);
             return BoltError::OUT_OF_MEMORY;

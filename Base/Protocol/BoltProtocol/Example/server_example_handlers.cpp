@@ -1,13 +1,13 @@
 #include "server_example_handlers.h"
 
 #include <exception>
-#include <optional>  // For HelloMessageParams members
+#include <optional>
 #include <variant>
+
+#include "boltprotocol/message_defs.h"  // For versions::Version from bolt_errors_versions.h
 
 namespace ServerHandlers {
 
-    // handle_hello_message now also takes the server_negotiated_version
-    // to potentially tailor its response or validation based on it.
     boltprotocol::BoltError handle_hello_message(const boltprotocol::HelloMessageParams& parsed_hello_params, boltprotocol::PackStreamWriter& response_writer, const boltprotocol::versions::Version& server_negotiated_version) {
         using namespace boltprotocol;
         std::cout << "  Server processing HELLO message from: " << parsed_hello_params.user_agent << std::endl;
@@ -28,11 +28,10 @@ namespace ServerHandlers {
             success_for_hello_params.metadata.emplace("connection_id", Value(std::string("server-conn-xyz")));
             success_for_hello_params.metadata.emplace("server", Value(std::string("MyExampleBoltServer/0.1 (Bolt ") + std::to_string(server_negotiated_version.major) + "." + std::to_string(server_negotiated_version.minor) + ")"));
 
-            // Example: If client requested utc patch and server supports it for this version
             if (server_negotiated_version.major == 4 && (server_negotiated_version.minor == 3 || server_negotiated_version.minor == 4)) {
                 if (parsed_hello_params.patch_bolt.has_value()) {
                     for (const auto& patch : parsed_hello_params.patch_bolt.value()) {
-                        if (patch == "utc") {  // Server agrees to "utc" patch
+                        if (patch == "utc") {
                             auto agreed_patches_list = std::make_shared<BoltList>();
                             agreed_patches_list->elements.emplace_back(Value(std::string("utc")));
                             success_for_hello_params.metadata.emplace("patch_bolt", Value(agreed_patches_list));
@@ -63,7 +62,7 @@ namespace ServerHandlers {
         }
 
         if (!server_resp_ok || !pss_to_write_sptr) {
-            if (server_resp_ok && !pss_to_write_sptr) {  // Only print if no exception but pss is null
+            if (server_resp_ok && !pss_to_write_sptr) {
                 print_bolt_error_details_server("server HELLO SUCCESS resp (null pss_to_write_sptr)", BoltError::OUT_OF_MEMORY, nullptr, &response_writer);
                 response_writer.set_error(BoltError::OUT_OF_MEMORY);
             }
@@ -77,21 +76,34 @@ namespace ServerHandlers {
         return err;
     }
 
-    // handle_run_message and deserialize_run_params_from_struct remain the same
-    // as they were not directly affected by HelloMessageParams changes.
-    // ... (rest of handle_run_message and deserialize_run_params_from_struct) ...
-    boltprotocol::BoltError handle_run_message(const boltprotocol::RunMessageParams& run_params, boltprotocol::PackStreamWriter& response_writer) {
+    // handle_run_message now receives fully parsed RunMessageParams.
+    // It no longer needs to deserialize from a raw PackStreamStructure itself.
+    boltprotocol::BoltError handle_run_message(const boltprotocol::RunMessageParams& run_params,  // Already parsed
+                                               boltprotocol::PackStreamWriter& response_writer) {
         using namespace boltprotocol;
         std::cout << "  Server processing RUN query: '" << run_params.cypher_query << "'" << std::endl;
+
+        // Access typed optional fields
+        if (run_params.db.has_value()) {
+            std::cout << "    For database: " << run_params.db.value() << std::endl;
+        }
+        if (run_params.tx_timeout.has_value()) {
+            std::cout << "    With tx_timeout: " << run_params.tx_timeout.value() << "ms" << std::endl;
+        }
+
+        // Access cypher parameters
         auto limit_it = run_params.parameters.find("limit");
         if (limit_it != run_params.parameters.end()) {
             if (const auto* limit_val_ptr = std::get_if<int64_t>(&(limit_it->second))) {
-                std::cout << "    With limit: " << *limit_val_ptr << std::endl;
-            } else {
-                std::cout << "    With limit: (value present but not int64_t)" << std::endl;
+                std::cout << "    With limit parameter: " << *limit_val_ptr << std::endl;
             }
-        } else {
-            std::cout << "    No 'limit' parameter found." << std::endl;
+        }
+        // Access other_extra_fields if needed
+        if (!run_params.other_extra_fields.empty()) {
+            std::cout << "    With other extra fields:" << std::endl;
+            for (const auto& pair : run_params.other_extra_fields) {
+                std::cout << "      " << pair.first << ": (type " << pair.second.index() << ")" << std::endl;
+            }
         }
 
         BoltError err = BoltError::SUCCESS;
@@ -100,11 +112,14 @@ namespace ServerHandlers {
         std::shared_ptr<BoltList> list_sptr;
         std::shared_ptr<PackStreamStructure> pss_to_write_sptr;
 
+        // 1. Send SUCCESS for RUN (contains field names)
         try {
             SuccessMessageParams run_success_params;
             list_sptr = std::make_shared<BoltList>();
             list_sptr->elements.emplace_back(Value(std::string("name")));
             run_success_params.metadata.emplace("fields", Value(list_sptr));
+            // Optionally add qid for explicit transactions, or t_first for auto-commit
+            // run_success_params.metadata.emplace("t_first", Value(static_cast<int64_t>(10))); // Example
 
             pss_obj_on_stack.tag = static_cast<uint8_t>(MessageTag::SUCCESS);
             pss_obj_on_stack.fields.clear();
@@ -138,6 +153,7 @@ namespace ServerHandlers {
         }
         std::cout << "  Server sent SUCCESS for RUN (with fields)." << std::endl;
 
+        // 2. Send RECORD messages (dummy data)
         for (int i = 0; i < 2; ++i) {
             try {
                 RecordMessageParams record_params;
@@ -174,9 +190,13 @@ namespace ServerHandlers {
             }
             std::cout << "  Server sent RECORD " << i << "." << std::endl;
         }
+        // 3. Send final SUCCESS (summary)
         try {
             SuccessMessageParams summary_success_params;
             summary_success_params.metadata.emplace("type", Value(std::string("r")));
+            // For auto-commit that's now finished:
+            // summary_success_params.metadata.emplace("bookmark", Value(std::string("neo4j:bookmark:v1:tx42")));
+            // summary_success_params.metadata.emplace("has_more", Value(false)); // If Bolt 4.0+
 
             pss_obj_on_stack.tag = static_cast<uint8_t>(MessageTag::SUCCESS);
             pss_obj_on_stack.fields.clear();
@@ -211,56 +231,19 @@ namespace ServerHandlers {
         return BoltError::SUCCESS;
     }
 
-    boltprotocol::BoltError deserialize_run_params_from_struct(const boltprotocol::PackStreamStructure& run_struct, boltprotocol::RunMessageParams& out_params) {
-        using namespace boltprotocol;
-        out_params.cypher_query.clear();
-        out_params.parameters.clear();
-        out_params.extra_metadata.clear();
-
-        if (run_struct.tag != static_cast<uint8_t>(MessageTag::RUN)) {
-            return BoltError::INVALID_MESSAGE_FORMAT;
-        }
-        if (run_struct.fields.size() < 2 || run_struct.fields.size() > 3) {
-            return BoltError::INVALID_MESSAGE_FORMAT;
-        }
-
-        bool conversion_ok = true;
-        try {
-            if (std::holds_alternative<std::string>(run_struct.fields[0])) {
-                out_params.cypher_query = std::get<std::string>(run_struct.fields[0]);
-            } else {
-                conversion_ok = false;
-            }
-
-            if (conversion_ok && std::holds_alternative<std::shared_ptr<BoltMap>>(run_struct.fields[1])) {
-                auto params_map_sptr = std::get<std::shared_ptr<BoltMap>>(run_struct.fields[1]);
-                if (params_map_sptr) {
-                    out_params.parameters = params_map_sptr->pairs;
-                } else {
-                    conversion_ok = false;
-                }
-            } else if (conversion_ok) {
-                conversion_ok = false;
-            }
-            if (conversion_ok && run_struct.fields.size() == 3) {
-                if (std::holds_alternative<std::shared_ptr<BoltMap>>(run_struct.fields[2])) {
-                    auto extra_map_sptr = std::get<std::shared_ptr<BoltMap>>(run_struct.fields[2]);
-                    if (extra_map_sptr) {
-                        out_params.extra_metadata = extra_map_sptr->pairs;
-                    }
-                } else {
-                    conversion_ok = false;
-                }
-            }
-        } catch (const std::bad_alloc&) {
-            return BoltError::OUT_OF_MEMORY;
-        } catch (const std::bad_variant_access&) {
-            return BoltError::INVALID_MESSAGE_FORMAT;
-        } catch (const std::exception&) {
-            return BoltError::UNKNOWN_ERROR;
-        }
-
-        return conversion_ok ? BoltError::SUCCESS : BoltError::INVALID_MESSAGE_FORMAT;
+    // This helper is no longer strictly needed if server_example_main.cpp directly uses
+    // deserialize_run_message_request. If it were kept, it would need significant rework
+    // to populate the new RunMessageParams structure correctly from a raw PackStreamStructure.
+    // For now, let's comment it out as its functionality is superseded.
+    /*
+    boltprotocol::BoltError deserialize_run_params_from_struct(
+        const boltprotocol::PackStreamStructure& run_struct,
+        boltprotocol::RunMessageParams& out_params) {
+        // ... This would need to parse run_struct.fields and populate the new
+        //     std::optional members of out_params and other_extra_fields ...
+        print_bolt_error_details_server("deserialize_run_params_from_struct is deprecated", boltprotocol::BoltError::UNKNOWN_ERROR);
+        return boltprotocol::BoltError::UNKNOWN_ERROR; // Placeholder
     }
+    */
 
 }  // namespace ServerHandlers
