@@ -1,0 +1,2074 @@
+# CMakeLists.txt for BoltProtocol module
+
+# Since this module is purely for protocol logic and data structures,
+# it might not have complex dependencies beyond standard C++.
+# If PackStream or other parts need external libs (e.g., for specific data types),
+# they would be added here.
+
+file(GLOB_RECURSE BOLT_PROTOCOL_SOURCES
+    CONFIGURE_DEPENDS
+    "Source/*.cpp"
+    "Source/**/*.cpp"
+)
+
+add_library(BoltProtocol ${BOLT_PROTOCOL_SOURCES})
+
+target_include_directories(BoltProtocol
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/Include"
+)
+
+# build example, no condition
+add_subdirectory(Example)
+
+# BoltProtocol itself likely doesn't link to socket libraries.
+# It provides structures and serialization/deserialization logic.
+# The Neo4jBoltDriver will link the socket library and use BoltProtocol.
+
+# Example of how other modules would link against BoltProtocol:
+# target_link_libraries(Neo4jBoltDriver PRIVATE BoltProtocol)#include <iomanip>  // For std::setw, std::setfill
+#include <iostream>
+#include <map>
+#include <string>
+#include <vector>
+
+#include "boltprotocol/message_defs.h"
+#include "boltprotocol/message_serialization.h"
+#include "boltprotocol/packstream_reader.h"
+#include "boltprotocol/packstream_writer.h"
+
+// Helper function to print a byte vector (for debugging)
+void print_bytes(const std::string& prefix, const std::vector<uint8_t>& bytes) {
+    std::cout << prefix;
+    for (uint8_t byte : bytes) {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+        std::cout << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(byte) << " ";
+    }
+    std::cout << std::dec << std::endl;
+}
+
+int main() {
+    // Assuming you have a 'using namespace your_new_bolt_namespace;' somewhere or will qualify all names.
+    // For clarity, I'll use bolt_protocol_impl:: explicitly.
+    using namespace boltprotocol;
+
+    std::cout << "Bolt Protocol Client Example" << std::endl;
+    std::cout << "----------------------------" << std::endl;
+
+    // --- 1. Simulate sending a HELLO message ---
+    std::vector<uint8_t> client_send_buffer;
+    PackStreamWriter writer(client_send_buffer);
+
+    HelloMessageParams hello_params;
+    hello_params.extra_auth_tokens.emplace("user_agent", Value(std::string("MyExampleCppClient/1.0")));
+    hello_params.extra_auth_tokens.emplace("scheme", Value(std::string("basic")));
+    hello_params.extra_auth_tokens.emplace("principal", Value(std::string("neo4j")));
+    hello_params.extra_auth_tokens.emplace("credentials", Value(std::string("password")));
+
+    // Example: Bolt Agent (optional but good practice for drivers)
+    // auto bolt_agent_map_ptr = std::make_unique<BoltMap>();
+    // bolt_agent_map_ptr->pairs.emplace("product", Value(std::string("MyExampleCppClient/1.0")));
+    // bolt_agent_map_ptr->pairs.emplace("platform", Value(std::string("Generic Platform")));
+    // bolt_agent_map_ptr->pairs.emplace("language", Value(std::string("C++26")));
+    // hello_params.extra_auth_tokens.emplace("bolt_agent", Value(std::move(bolt_agent_map_ptr)));
+
+    std::cout << "\nSerializing HELLO message..." << std::endl;
+    BoltError err = serialize_hello_message(hello_params, writer);
+    if (err != BoltError::SUCCESS) {
+        std::cerr << "Error serializing HELLO: " << static_cast<int>(err) << std::endl;
+        return 1;
+    }
+    print_bytes("HELLO message bytes: ", client_send_buffer);
+
+    std::vector<uint8_t> server_receive_buffer_sim = client_send_buffer;  // Simulating send
+    client_send_buffer.clear();
+
+    // --- 2. Simulate receiving a SUCCESS message (response to HELLO) ---
+    std::vector<uint8_t> server_send_buffer_for_hello_ack;
+    PackStreamWriter server_ack_writer(server_send_buffer_for_hello_ack);
+
+    SuccessMessageParams success_params_from_server;
+    success_params_from_server.metadata.emplace("connection_id", Value(std::string("bolt-12345")));
+    success_params_from_server.metadata.emplace("server", Value(std::string("Neo4j/5.x.x")));
+
+    // Manually constructing PSS for server's SUCCESS (as deserialize_success_message expects it)
+    PackStreamStructure success_struct_server_raw;
+    success_struct_server_raw.tag = static_cast<uint8_t>(MessageTag::SUCCESS);
+    auto success_meta_map_ptr = std::make_unique<BoltMap>();
+    success_meta_map_ptr->pairs = std::move(success_params_from_server.metadata);  // Move the map
+    success_struct_server_raw.fields.emplace_back(Value(std::move(success_meta_map_ptr)));
+
+    err = server_ack_writer.write(Value(std::make_unique<PackStreamStructure>(std::move(success_struct_server_raw))));
+    if (err != BoltError::SUCCESS) {
+        std::cerr << "Error server serializing SUCCESS for HELLO_ACK: " << static_cast<int>(err) << std::endl;
+        return 1;
+    }
+    print_bytes("Simulated SUCCESS (for HELLO_ACK) from server: ", server_send_buffer_for_hello_ack);
+
+    std::vector<uint8_t> client_receive_buffer_hello_ack = server_send_buffer_for_hello_ack;  // Simulating receive
+    PackStreamReader client_hello_ack_reader(client_receive_buffer_hello_ack);
+    SuccessMessageParams received_success_params;
+
+    std::cout << "\nClient deserializing SUCCESS message (for HELLO_ACK)..." << std::endl;
+    err = deserialize_success_message(client_hello_ack_reader, received_success_params);
+    if (err != BoltError::SUCCESS) {
+        std::cerr << "Error deserializing SUCCESS (for HELLO_ACK): " << static_cast<int>(err) << std::endl;
+        if (client_hello_ack_reader.has_error()) {
+            std::cerr << "  Reader error code: " << static_cast<int>(client_hello_ack_reader.get_error()) << std::endl;
+        }
+        return 1;
+    }
+    std::cout << "SUCCESS (for HELLO_ACK) deserialized successfully!" << std::endl;
+
+    auto print_metadata_string = [&](const std::string& key) {
+        auto it = received_success_params.metadata.find(key);
+        if (it != received_success_params.metadata.end()) {
+            if (auto* str_val = std::get_if<std::string>(&it->second)) {
+                std::cout << *str_val;
+            } else {
+                std::cout << " (not a string)";
+            }
+        } else {
+            std::cout << "not found";
+        }
+    };
+    std::cout << "  Server version: ";
+    print_metadata_string("server");
+    std::cout << std::endl;
+    std::cout << "  Connection ID: ";
+    print_metadata_string("connection_id");
+    std::cout << std::endl;
+
+    // --- 3. Simulate sending a RUN message ---
+    RunMessageParams run_params;
+    run_params.cypher_query = "MATCH (n) RETURN n.name AS name LIMIT $limit";
+    run_params.parameters.emplace("limit", Value(static_cast<int64_t>(10)));
+
+    std::cout << "\nSerializing RUN message..." << std::endl;
+    PackStreamWriter run_writer(client_send_buffer);
+    err = serialize_run_message(run_params, run_writer);
+    if (err != BoltError::SUCCESS) {
+        std::cerr << "Error serializing RUN: " << static_cast<int>(err) << std::endl;
+        return 1;
+    }
+    print_bytes("RUN message bytes: ", client_send_buffer);
+
+    std::cout << "\nClient example finished." << std::endl;
+    return 0;
+}add_executable(client_example client_example.cpp)
+target_link_libraries(client_example PUBLIC BoltProtocol)
+
+add_executable(server_example server_example.cpp)
+target_link_libraries(server_example PUBLIC BoltProtocol)#include <iomanip>  // For std::setw, std::setfill
+#include <iostream>
+#include <map>
+#include <memory>  // For std::make_shared, std::shared_ptr
+#include <string>
+#include <variant>
+#include <vector>
+
+#include "boltprotocol/message_defs.h"
+#include "boltprotocol/message_serialization.h"  // For serialize_run_message etc. if used by server to construct client msgs
+#include "boltprotocol/packstream_reader.h"
+#include "boltprotocol/packstream_writer.h"
+
+// Using a namespace for the example code to avoid potential clashes
+namespace boltprotocol_example_server {
+
+    // Make types from the library available without full qualification within this namespace
+    using namespace ::boltprotocol;
+
+    // Helper function to print a byte vector (for debugging)
+    void print_bytes_server(const std::string& prefix, const std::vector<uint8_t>& bytes) {
+        std::cout << prefix;
+        for (uint8_t byte : bytes) {
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+            std::cout << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(byte) << " ";
+        }
+        std::cout << std::dec << std::endl;
+    }
+
+    // Dummy function to simulate processing a RUN query
+    void process_run_query(const RunMessageParams& run_params, PackStreamWriter& response_writer) {
+        std::cout << "  Server processing RUN query: " << run_params.cypher_query << std::endl;
+        auto limit_it = run_params.parameters.find("limit");
+        if (limit_it != run_params.parameters.end()) {
+            if (auto* limit_val = std::get_if<int64_t>(&limit_it->second)) {
+                std::cout << "    With limit: " << *limit_val << std::endl;
+            }
+        }
+
+        BoltError err;
+
+        // 1. Send SUCCESS for RUN (contains field names)
+        SuccessMessageParams run_success_params;
+        auto fields_list_sptr = std::make_shared<BoltList>();  // Use make_shared
+        fields_list_sptr->elements.emplace_back(Value(std::string("name")));
+        run_success_params.metadata.emplace("fields", Value(std::move(fields_list_sptr)));  // Value gets shared_ptr
+
+        PackStreamStructure run_success_struct_raw;
+        run_success_struct_raw.tag = static_cast<uint8_t>(MessageTag::SUCCESS);
+        auto run_success_meta_map_sptr = std::make_shared<BoltMap>();  // Use make_shared
+        run_success_meta_map_sptr->pairs = std::move(run_success_params.metadata);
+        run_success_struct_raw.fields.emplace_back(Value(std::move(run_success_meta_map_sptr)));  // Value gets shared_ptr
+
+        err = response_writer.write(Value(std::make_shared<PackStreamStructure>(std::move(run_success_struct_raw))));  // Use make_shared
+        if (err != BoltError::SUCCESS) {
+            std::cerr << "  Server error serializing SUCCESS for RUN: " << static_cast<int>(err) << std::endl;
+            return;
+        }
+        std::cout << "  Server sent SUCCESS for RUN (with fields)." << std::endl;
+
+        // 2. Send RECORD messages (dummy data)
+        for (int i = 0; i < 2; ++i) {
+            RecordMessageParams record_params;
+            record_params.fields.emplace_back(Value(std::string("Node " + std::to_string(i))));
+
+            PackStreamStructure record_struct_raw;
+            record_struct_raw.tag = static_cast<uint8_t>(MessageTag::RECORD);
+            auto record_fields_list_sptr = std::make_shared<BoltList>();  // Use make_shared
+            record_fields_list_sptr->elements = std::move(record_params.fields);
+            record_struct_raw.fields.emplace_back(Value(std::move(record_fields_list_sptr)));  // Value gets shared_ptr
+
+            err = response_writer.write(Value(std::make_shared<PackStreamStructure>(std::move(record_struct_raw))));  // Use make_shared
+            if (err != BoltError::SUCCESS) {
+                std::cerr << "  Server error serializing RECORD " << i << ": " << static_cast<int>(err) << std::endl;
+                return;
+            }
+            std::cout << "  Server sent RECORD " << i << "." << std::endl;
+        }
+
+        // 3. Send final SUCCESS (summary)
+        SuccessMessageParams summary_success_params;
+        summary_success_params.metadata.emplace("type", Value(std::string("r")));
+
+        PackStreamStructure summary_struct_raw;
+        summary_struct_raw.tag = static_cast<uint8_t>(MessageTag::SUCCESS);
+        auto summary_meta_map_sptr = std::make_shared<BoltMap>();  // Use make_shared
+        summary_meta_map_sptr->pairs = std::move(summary_success_params.metadata);
+        summary_struct_raw.fields.emplace_back(Value(std::move(summary_meta_map_sptr)));  // Value gets shared_ptr
+
+        err = response_writer.write(Value(std::make_shared<PackStreamStructure>(std::move(summary_struct_raw))));  // Use make_shared
+        if (err != BoltError::SUCCESS) {
+            std::cerr << "  Server error serializing SUCCESS summary: " << static_cast<int>(err) << std::endl;
+            return;
+        }
+        std::cout << "  Server sent SUCCESS summary." << std::endl;
+    }
+
+}  // namespace boltprotocol_example_server
+
+int main() {
+    using namespace boltprotocol_example_server;
+    using namespace boltprotocol;
+
+    std::cout << "Bolt Protocol Server Example" << std::endl;
+    std::cout << "----------------------------" << std::endl;
+
+    std::vector<uint8_t> server_receive_buffer;
+    std::vector<uint8_t> server_send_buffer;
+
+    // === Stage 1: Client sends HELLO, Server responds SUCCESS ===
+    std::cout << "\nServer expecting HELLO message..." << std::endl;
+    {
+        HelloMessageParams client_hello_params;
+        client_hello_params.extra_auth_tokens.emplace("user_agent", Value(std::string("MyExampleCppClient/1.0")));
+        client_hello_params.extra_auth_tokens.emplace("scheme", Value(std::string("basic")));
+        client_hello_params.extra_auth_tokens.emplace("principal", Value(std::string("neo4j")));
+        client_hello_params.extra_auth_tokens.emplace("credentials", Value(std::string("password")));
+
+        PackStreamWriter temp_writer(server_receive_buffer);
+        // Assuming serialize_hello_message is updated to use make_shared internally
+        serialize_hello_message(client_hello_params, temp_writer);
+    }
+    print_bytes_server("Server received bytes for HELLO: ", server_receive_buffer);
+
+    PackStreamReader hello_reader(server_receive_buffer);
+    Value received_value_hello;
+    BoltError err = hello_reader.read(received_value_hello);
+    if (err != BoltError::SUCCESS) {
+        std::cerr << "Server: Error reading HELLO structure. Error: " << static_cast<int>(err) << std::endl;
+        return 1;
+    }
+    // Correctly use std::shared_ptr with holds_alternative and get
+    if (!std::holds_alternative<std::shared_ptr<PackStreamStructure>>(received_value_hello)) {
+        std::cerr << "Server: Received HELLO message is not a structure as expected." << std::endl;
+        return 1;
+    }
+
+    std::shared_ptr<PackStreamStructure> hello_struct_sptr = std::get<std::shared_ptr<PackStreamStructure>>(std::move(received_value_hello));
+    if (!hello_struct_sptr || static_cast<MessageTag>(hello_struct_sptr->tag) != MessageTag::HELLO) {
+        std::cerr << "Server: Received message is not HELLO." << std::endl;
+        return 1;
+    }
+    std::cout << "Server: HELLO message structure received." << std::endl;
+    // Further parsing of hello_struct_sptr->fields[0] (the metadata map) would go here.
+    // For example:
+    // if (!hello_struct_sptr->fields.empty() && std::holds_alternative<std::shared_ptr<BoltMap>>(hello_struct_sptr->fields[0])) {
+    //     auto metadata_map = std::get<std::shared_ptr<BoltMap>>(hello_struct_sptr->fields[0]);
+    //     // Now access metadata_map->pairs
+    // }
+
+    server_send_buffer.clear();
+    PackStreamWriter success_hello_writer(server_send_buffer);
+    SuccessMessageParams success_for_hello_params;
+    success_for_hello_params.metadata.emplace("connection_id", Value(std::string("server-conn-xyz")));
+    success_for_hello_params.metadata.emplace("server", Value(std::string("MyExampleBoltServer/0.1")));
+
+    PackStreamStructure success_pss_for_hello_raw;
+    success_pss_for_hello_raw.tag = static_cast<uint8_t>(MessageTag::SUCCESS);
+    auto success_meta_map_for_hello_sptr = std::make_shared<BoltMap>();  // Use make_shared
+    success_meta_map_for_hello_sptr->pairs = std::move(success_for_hello_params.metadata);
+    success_pss_for_hello_raw.fields.emplace_back(Value(std::move(success_meta_map_for_hello_sptr)));                      // Value gets shared_ptr
+    err = success_hello_writer.write(Value(std::make_shared<PackStreamStructure>(std::move(success_pss_for_hello_raw))));  // Use make_shared
+
+    if (err != BoltError::SUCCESS) {
+        std::cerr << "Server: Error serializing SUCCESS for HELLO: " << static_cast<int>(err) << std::endl;
+        return 1;
+    }
+    print_bytes_server("Server sending SUCCESS (for HELLO): ", server_send_buffer);
+    server_receive_buffer.clear();
+
+    // === Stage 2: Client sends RUN, Server responds with SUCCESS, RECORD(s), SUCCESS ===
+    std::cout << "\nServer expecting RUN message..." << std::endl;
+    {
+        RunMessageParams client_run_params;
+        client_run_params.cypher_query = "MATCH (n) RETURN n.name AS name LIMIT $limit";
+        client_run_params.parameters.emplace("limit", Value(static_cast<int64_t>(5)));
+
+        PackStreamWriter temp_writer(server_receive_buffer);
+        // Assuming serialize_run_message is updated to use make_shared internally
+        serialize_run_message(client_run_params, temp_writer);
+    }
+    print_bytes_server("Server received bytes for RUN: ", server_receive_buffer);
+
+    PackStreamReader run_reader(server_receive_buffer);
+    Value received_value_run;
+    err = run_reader.read(received_value_run);
+    if (err != BoltError::SUCCESS) {
+        std::cerr << "Server: Error reading RUN structure. Error: " << static_cast<int>(err) << std::endl;
+        return 1;
+    }
+    if (!std::holds_alternative<std::shared_ptr<PackStreamStructure>>(received_value_run)) {  // Use shared_ptr
+        std::cerr << "Server: Received RUN message is not a structure as expected." << std::endl;
+        return 1;
+    }
+    std::shared_ptr<PackStreamStructure> run_struct_sptr = std::get<std::shared_ptr<PackStreamStructure>>(std::move(received_value_run));  // Use shared_ptr
+    if (!run_struct_sptr || static_cast<MessageTag>(run_struct_sptr->tag) != MessageTag::RUN) {
+        std::cerr << "Server: Received message is not RUN." << std::endl;
+        return 1;
+    }
+    std::cout << "Server: RUN message structure received." << std::endl;
+
+    RunMessageParams actual_run_params;
+    // Deserialize RUN PSS into actual_run_params
+    if (run_struct_sptr->fields.size() >= 1 && std::holds_alternative<std::string>(run_struct_sptr->fields[0])) {
+        // For string, directly get it. If fields[0] was moved from, need to be careful.
+        // Here, run_struct_sptr->fields[0] is const& if run_struct_sptr is const.
+        // Or if we std::move(run_struct_sptr->fields[0]), it works.
+        actual_run_params.cypher_query = std::get<std::string>(std::move(run_struct_sptr->fields[0]));
+    }
+    if (run_struct_sptr->fields.size() >= 2 && std::holds_alternative<std::shared_ptr<BoltMap>>(run_struct_sptr->fields[1])) {  // Use shared_ptr
+        auto params_map_sptr = std::get<std::shared_ptr<BoltMap>>(std::move(run_struct_sptr->fields[1]));                       // Use shared_ptr
+        if (params_map_sptr) {
+            actual_run_params.parameters = std::move(params_map_sptr->pairs);
+        }
+    }
+    if (run_struct_sptr->fields.size() >= 3 && std::holds_alternative<std::shared_ptr<BoltMap>>(run_struct_sptr->fields[2])) {  // Use shared_ptr
+        auto extra_map_sptr = std::get<std::shared_ptr<BoltMap>>(std::move(run_struct_sptr->fields[2]));                        // Use shared_ptr
+        if (extra_map_sptr) {
+            actual_run_params.extra_metadata = std::move(extra_map_sptr->pairs);
+        }
+    }
+
+    server_send_buffer.clear();
+    PackStreamWriter run_response_writer(server_send_buffer);
+    process_run_query(actual_run_params, run_response_writer);
+
+    print_bytes_server("Server sending full response stream for RUN: ", server_send_buffer);
+
+    std::cout << "\nServer example finished." << std::endl;
+    return 0;
+}#ifndef BOLT_PROTOCOL_IMPL_DETAIL_BYTE_ORDER_UTILS_H
+#define BOLT_PROTOCOL_IMPL_DETAIL_BYTE_ORDER_UTILS_H
+
+#include <algorithm>  // For std::reverse
+#include <bit>        // For std::endian (C++20 and later)
+#include <cstdint>
+#include <type_traits>  // For std::is_integral_v, std::is_enum_v
+
+namespace boltprotocol {
+    namespace detail {
+
+        // Helper to swap bytes of an integer type T
+        template <typename T>
+        inline T swap_bytes_helper(T value) {
+            static_assert(std::is_integral_v<T> || std::is_enum_v<T>, "swap_bytes_helper requires an integral or enum type.");
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+            auto* bytes = reinterpret_cast<unsigned char*>(&value);
+            std::reverse(bytes, bytes + sizeof(T));
+            return value;
+        }
+
+        // --- Host to Big Endian (Network Order) ---
+        inline uint16_t host_to_be(uint16_t val) {
+            if constexpr (std::endian::native == std::endian::little) {
+                return swap_bytes_helper(val);
+            } else {  // std::endian::big (or other, assuming network order is what we want if not little)
+                return val;
+            }
+        }
+
+        inline uint32_t host_to_be(uint32_t val) {
+            if constexpr (std::endian::native == std::endian::little) {
+                return swap_bytes_helper(val);
+            } else {
+                return val;
+            }
+        }
+
+        inline uint64_t host_to_be(uint64_t val) {
+            if constexpr (std::endian::native == std::endian::little) {
+                return swap_bytes_helper(val);
+            } else {
+                return val;
+            }
+        }
+
+        // --- Big Endian (Network Order) to Host ---
+        inline uint16_t be_to_host(uint16_t val_be) {
+            if constexpr (std::endian::native == std::endian::little) {
+                return swap_bytes_helper(val_be);
+            } else {
+                return val_be;
+            }
+        }
+
+        inline uint32_t be_to_host(uint32_t val_be) {
+            if constexpr (std::endian::native == std::endian::little) {
+                return swap_bytes_helper(val_be);
+            } else {
+                return val_be;
+            }
+        }
+
+        inline uint64_t be_to_host(uint64_t val_be) {
+            if constexpr (std::endian::native == std::endian::little) {
+                return swap_bytes_helper(val_be);
+            } else {
+                return val_be;
+            }
+        }
+
+    }  // namespace detail
+}  // namespace boltprotocol
+
+#endif  // BOLT_PROTOCOL_IMPL_DETAIL_BYTE_ORDER_UTILS_H#ifndef BOLTPROTOCOL_MESSAGE_DEFS_H
+#define BOLTPROTOCOL_MESSAGE_DEFS_H
+
+#include <array>
+#include <cstdint>
+#include <map>
+#include <memory>  // For std::shared_ptr
+#include <optional>
+#include <string>
+#include <type_traits>  // For std::decay_t in operator== (if needed, or in .cpp)
+#include <variant>
+#include <vector>
+
+namespace boltprotocol {
+
+    // Forward declarations for types that will be wrapped by shared_ptr in the Value variant
+    struct BoltList;
+    struct BoltMap;
+    struct PackStreamStructure;
+
+    // The main Value type alias for PackStream values
+    using Value = std::variant<std::nullptr_t,                       // Null
+                               bool,                                 // Boolean
+                               int64_t,                              // Integer
+                               double,                               // Float
+                               std::string,                          // String
+                               std::shared_ptr<BoltList>,            // List (using shared_ptr)
+                               std::shared_ptr<BoltMap>,             // Map (using shared_ptr)
+                               std::shared_ptr<PackStreamStructure>  // Structure (using shared_ptr)
+                               >;
+
+    // Definitions of the helper structs that are pointed to by shared_ptr.
+    // These structs can use 'Value' because 'Value' (the variant alias) is now a complete type.
+
+    struct BoltList {
+        std::vector<Value> elements;
+
+        bool operator==(const BoltList& other) const {
+            return elements == other.elements;
+        }
+        // Add operator< if BoltList needs to be comparable for ordered collections
+    };
+
+    struct BoltMap {
+        std::map<std::string, Value> pairs;
+
+        bool operator==(const BoltMap& other) const {
+            return pairs == other.pairs;
+        }
+        // Add operator< if BoltMap needs to be comparable
+    };
+
+    struct PackStreamStructure {
+        uint8_t tag;
+        std::vector<Value> fields;
+
+        bool operator==(const PackStreamStructure& other) const {
+            return tag == other.tag && fields == other.fields;
+        }
+        // Add operator< if PackStreamStructure needs to be comparable
+    };
+
+    // Equality operator for the Value variant itself
+    // Declaration - implementation will be in the .cpp file
+    bool operator==(const Value& lhs, const Value& rhs);
+    // bool operator!=(const Value& lhs, const Value& rhs); // Can be defaulted or implemented via ==
+    // bool operator<(const Value& lhs, const Value& rhs); // If needed for ordered collections of Values
+
+    // Magic Preamble for Bolt connection handshake
+    constexpr uint32_t BOLT_MAGIC_PREAMBLE = 0x6060B017;  // Network Byte Order (Big Endian)
+
+    // Default User Agent string template for HELLO message
+    extern const std::string DEFAULT_USER_AGENT_FORMAT_STRING;
+
+    enum class BoltError { SUCCESS = 0, UNKNOWN_ERROR, INVALID_ARGUMENT, SERIALIZATION_ERROR, DESERIALIZATION_ERROR, INVALID_MESSAGE_FORMAT, UNSUPPORTED_PROTOCOL_VERSION, NETWORK_ERROR, HANDSHAKE_FAILED, CHUNK_TOO_LARGE };
+
+    namespace versions {
+        struct Version {
+            uint8_t major;
+            uint8_t minor;
+
+            bool operator<(const Version& other) const;
+            bool operator==(const Version& other) const;
+            bool operator!=(const Version& other) const;
+
+            uint32_t to_handshake_int() const;
+            std::array<uint8_t, 4> to_handshake_bytes() const;
+        };
+
+        extern const Version V5_4;
+        extern const Version V5_3;
+        extern const Version V5_2;
+        extern const Version V5_1;
+        extern const Version V5_0;
+        extern const Version V4_4;
+        extern const Version V4_3;
+        extern const Version V4_2;
+
+        extern const std::vector<Version>& get_default_proposed_versions();
+    }  // namespace versions
+
+    enum class MessageTag : uint8_t {
+        // Client -> Server Messages
+        HELLO = 0x01,
+        RUN = 0x10,
+        DISCARD = 0x2F,
+        PULL = 0x3F,
+        BEGIN = 0x11,
+        COMMIT = 0x12,
+        ROLLBACK = 0x13,
+        RESET = 0x0F,
+        GOODBYE = 0x02,
+        ROUTE = 0x66,
+        TELEMETRY = 0x54,
+
+        // Server -> Client Messages
+        SUCCESS = 0x70,
+        RECORD = 0x71,
+        IGNORED = 0x7E,
+        FAILURE = 0x7F,
+    };
+
+    constexpr uint16_t MAX_CHUNK_PAYLOAD_SIZE = 65535;
+    constexpr uint16_t CHUNK_HEADER_SIZE = 2;
+
+    struct HelloMessageParams {
+        // This map contains all key-value pairs for the HELLO message metadata.
+        // Keys like "user_agent", "scheme", "principal", "credentials", "routing", "db", "bolt_agent", etc.
+        // The values are `boltprotocol::Value` type.
+        std::map<std::string, Value> extra_auth_tokens;
+    };
+
+    struct RunMessageParams {
+        std::string cypher_query;
+        std::map<std::string, Value> parameters;
+        std::map<std::string, Value> extra_metadata;  // bookmarks, tx_timeout, tx_metadata, mode, db, imp_user
+    };
+
+    struct DiscardMessageParams {
+        std::optional<int64_t> n;    // Number of records to discard, -1 for all
+        std::optional<int64_t> qid;  // Query ID
+    };
+
+    struct PullMessageParams {
+        std::optional<int64_t> n;    // Number of records to pull, -1 for all
+        std::optional<int64_t> qid;  // Query ID
+    };
+
+    struct SuccessMessageParams {
+        std::map<std::string, Value> metadata;
+    };
+
+    struct RecordMessageParams {
+        std::vector<Value> fields;
+    };
+
+    struct FailureMessageParams {
+        std::map<std::string, Value> metadata;  // "code" and "message"
+    };
+
+}  // namespace boltprotocol
+
+#endif  // BOLTPROTOCOL_MESSAGE_DEFS_H#ifndef BOLT_PROTOCOL_IMPL_MESSAGE_SERIALIZATION_H
+#define BOLT_PROTOCOL_IMPL_MESSAGE_SERIALIZATION_H
+
+#include <optional>  // For optional return values or out-params
+#include <string>
+#include <vector>
+
+#include "boltprotocol/message_defs.h"       // For message parameter structs, Value, BoltError, MessageTag
+#include "boltprotocol/packstream_reader.h"  // For PackStreamReader
+#include "boltprotocol/packstream_writer.h"  // For PackStreamWriter
+
+namespace boltprotocol {
+
+    // --- Client Message Serialization ---
+    // These functions take message parameters, construct the appropriate PackStreamStructure,
+    // and then serialize it using a PackStreamWriter into the provided buffer.
+
+    /**
+     * @brief Serializes a HELLO message.
+     * @param params The parameters for the HELLO message.
+     * @param writer The PackStreamWriter to use for serialization.
+     * @return BoltError::SUCCESS on success, or an error code.
+     */
+    BoltError serialize_hello_message(const HelloMessageParams& params, PackStreamWriter& writer);
+
+    /**
+     * @brief Serializes a RUN message.
+     * @param params The parameters for the RUN message.
+     * @param writer The PackStreamWriter to use for serialization.
+     * @return BoltError::SUCCESS on success, or an error code.
+     */
+    BoltError serialize_run_message(const RunMessageParams& params, PackStreamWriter& writer);
+
+    /**
+     * @brief Serializes a PULL message.
+     * @param params The parameters for the PULL message.
+     * @param writer The PackStreamWriter to use for serialization.
+     * @return BoltError::SUCCESS on success, or an error code.
+     */
+    BoltError serialize_pull_message(const PullMessageParams& params, PackStreamWriter& writer);
+
+    /**
+     * @brief Serializes a DISCARD message.
+     * @param params The parameters for the DISCARD message.
+     * @param writer The PackStreamWriter to use for serialization.
+     * @return BoltError::SUCCESS on success, or an error code.
+     */
+    BoltError serialize_discard_message(const DiscardMessageParams& params, PackStreamWriter& writer);
+
+    /**
+     * @brief Serializes a GOODBYE message (no parameters).
+     * @param writer The PackStreamWriter to use for serialization.
+     * @return BoltError::SUCCESS on success, or an error code.
+     */
+    BoltError serialize_goodbye_message(PackStreamWriter& writer);
+
+    /**
+     * @brief Serializes a RESET message (no parameters).
+     * @param writer The PackStreamWriter to use for serialization.
+     * @return BoltError::SUCCESS on success, or an error code.
+     */
+    BoltError serialize_reset_message(PackStreamWriter& writer);
+
+    // TODO: Add serialization for BEGIN, COMMIT, ROLLBACK, ROUTE, TELEMETRY etc.
+
+    // --- Server Message Deserialization ---
+    // These functions take a PackStreamReader (which is assumed to be positioned at the start
+    // of a PackStream structure representing a message), read the structure, validate its tag
+    // and content, and populate the corresponding message parameter struct.
+
+    /**
+     * @brief Deserializes a SUCCESS message.
+     * @param reader The PackStreamReader to use for deserialization.
+     * @param out_params The structure to populate with deserialized parameters.
+     * @return BoltError::SUCCESS on success, or an error code.
+     *         The reader must be positioned at the start of the SUCCESS message structure.
+     */
+    BoltError deserialize_success_message(PackStreamReader& reader, SuccessMessageParams& out_params);
+
+    /**
+     * @brief Deserializes a FAILURE message.
+     * @param reader The PackStreamReader to use for deserialization.
+     * @param out_params The structure to populate with deserialized parameters.
+     * @return BoltError::SUCCESS on success, or an error code.
+     */
+    BoltError deserialize_failure_message(PackStreamReader& reader, FailureMessageParams& out_params);
+
+    /**
+     * @brief Deserializes a RECORD message.
+     * @param reader The PackStreamReader to use for deserialization.
+     * @param out_params The structure to populate with deserialized parameters.
+     * @return BoltError::SUCCESS on success, or an error code.
+     */
+    BoltError deserialize_record_message(PackStreamReader& reader, RecordMessageParams& out_params);
+
+    /**
+     * @brief Deserializes an IGNORED message.
+     * @param reader The PackStreamReader to use for deserialization.
+     * @return BoltError::SUCCESS on success if an IGNORED message is correctly parsed, or an error code.
+     *         There are no parameters for IGNORED.
+     */
+    BoltError deserialize_ignored_message(PackStreamReader& reader);
+
+    // TODO: Add deserialization for other server messages if needed by the client logic.
+
+    // Helper to peek message tag (useful for dispatching deserialization)
+    // This function attempts to read just the structure header to get the tag,
+    // without consuming the entire message yet.
+    // The reader's state might be affected (it will consume the header).
+    // Alternatively, a more complex peeker could try to rewind or use a separate reader.
+    // For now, assume it consumes the header.
+    // A better approach might be:
+    // 1. Reader reads a Value.
+    // 2. Dispatcher checks if Value is a PSS.
+    // 3. Dispatcher gets tag from PSS.
+    // 4. Dispatcher calls appropriate deserialize_xxx(const PackStreamStructure&, XxxParams&).
+    // This simplifies the deserialize_xxx functions.
+
+    /**
+     * @brief Attempts to read a PackStream structure and return its tag.
+     * This is a utility function; the main deserialization functions will handle full structures.
+     * @param reader The PackStreamReader to read from.
+     * @param out_tag The message tag read from the structure.
+     * @param out_fields_count The number of fields in the structure.
+     * @return BoltError::SUCCESS if a structure header was read successfully.
+     *         The reader will have consumed the structure header.
+     */
+    BoltError peek_message_structure_header(PackStreamReader& reader, uint8_t& out_tag, uint32_t& out_fields_count);
+
+}  // namespace boltprotocol
+
+#endif  // BOLT_PROTOCOL_IMPL_MESSAGE_SERIALIZATION_H#ifndef BOLT_PROTOCOL_IMPL_PACKSTREAM_CONSTANTS_H
+#define BOLT_PROTOCOL_IMPL_PACKSTREAM_CONSTANTS_H
+
+#include <cstdint>
+
+namespace boltprotocol {
+
+    // PackStream Marker Bytes
+    constexpr uint8_t MARKER_NULL = 0xC0;
+    constexpr uint8_t MARKER_FALSE = 0xC2;
+    constexpr uint8_t MARKER_TRUE = 0xC3;
+    constexpr uint8_t MARKER_FLOAT64 = 0xC1;
+
+    // Integer markers
+    // Tiny Int: -16 to 127 directly encoded in the marker byte
+    // INT_8:  0xC8 <int8>
+    // INT_16: 0xC9 <int16>
+    // INT_32: 0xCA <int32>
+    // INT_64: 0xCB <int64>
+    constexpr uint8_t MARKER_INT_8 = 0xC8;
+    constexpr uint8_t MARKER_INT_16 = 0xC9;
+    constexpr uint8_t MARKER_INT_32 = 0xCA;
+    constexpr uint8_t MARKER_INT_64 = 0xCB;
+
+    // String markers
+    // TINY_STRING: 0x80..0x8F (length 0-15)
+    // STRING_8:    0xD0 <len_uint8> <utf8_bytes>
+    // STRING_16:   0xD1 <len_uint16> <utf8_bytes>
+    // STRING_32:   0xD2 <len_uint32> <utf8_bytes>
+    constexpr uint8_t MARKER_TINY_STRING_BASE = 0x80;  // Base for 0x80 | len
+    constexpr uint8_t MARKER_STRING_8 = 0xD0;
+    constexpr uint8_t MARKER_STRING_16 = 0xD1;
+    constexpr uint8_t MARKER_STRING_32 = 0xD2;
+
+    // List markers
+    // TINY_LIST:   0x90..0x9F (size 0-15)
+    // LIST_8:      0xD4 <size_uint8>
+    // LIST_16:     0xD5 <size_uint16>
+    // LIST_32:     0xD6 <size_uint32>
+    constexpr uint8_t MARKER_TINY_LIST_BASE = 0x90;  // Base for 0x90 | size
+    constexpr uint8_t MARKER_LIST_8 = 0xD4;
+    constexpr uint8_t MARKER_LIST_16 = 0xD5;
+    constexpr uint8_t MARKER_LIST_32 = 0xD6;
+
+    // Map markers
+    // TINY_MAP:    0xA0..0xAF (size 0-15)
+    // MAP_8:       0xD8 <size_uint8>
+    // MAP_16:      0xD9 <size_uint16>
+    // MAP_32:      0xDA <size_uint32>
+    constexpr uint8_t MARKER_TINY_MAP_BASE = 0xA0;  // Base for 0xA0 | size
+    constexpr uint8_t MARKER_MAP_8 = 0xD8;
+    constexpr uint8_t MARKER_MAP_16 = 0xD9;
+    constexpr uint8_t MARKER_MAP_32 = 0xDA;
+
+    // Structure markers
+    // TINY_STRUCT: 0xB0..0xBF (size 0-15) <tag_uint8>
+    // STRUCT_8:    0xDC <size_uint8> <tag_uint8>
+    // STRUCT_16:   0xDD <size_uint16> <tag_uint8>
+    constexpr uint8_t MARKER_TINY_STRUCT_BASE = 0xB0;  // Base for 0xB0 | size
+    constexpr uint8_t MARKER_STRUCT_8 = 0xDC;
+    constexpr uint8_t MARKER_STRUCT_16 = 0xDD;
+
+}  // namespace boltprotocol
+
+#endif  // BOLT_PROTOCOL_IMPL_PACKSTREAM_CONSTANTS_H#ifndef BOLT_PROTOCOL_IMPL_PACKSTREAM_READER_H
+#define BOLT_PROTOCOL_IMPL_PACKSTREAM_READER_H
+
+#include <cstdint>
+#include <iosfwd>
+#include <stdexcept>
+#include <string>
+#include <type_traits>  // For std::is_integral_v, std::is_enum_v
+#include <vector>
+
+#include "boltprotocol/detail/byte_order_utils.h"  // Include the new utility header
+#include "boltprotocol/message_defs.h"
+#include "boltprotocol/packstream_constants.h"
+
+namespace boltprotocol {
+
+    class PackStreamReader {
+      public:
+        explicit PackStreamReader(const std::vector<uint8_t>& buffer);
+        explicit PackStreamReader(std::istream& stream);
+
+        Value read();
+        BoltError read(Value& out_value);
+
+        bool has_error() const {
+            return error_state_ != BoltError::SUCCESS;
+        }
+        BoltError get_error() const {
+            return error_state_;
+        }
+        bool eof() const;
+
+      private:
+        uint8_t peek_byte();
+        uint8_t consume_byte();
+        void consume_bytes(void* dest, size_t size);
+
+        template <typename T>
+        T consume_network_int() {
+            static_assert(std::is_integral_v<T> || std::is_enum_v<T>, "consume_network_int requires an integral or enum type.");
+            T host_val = 0;
+
+            if constexpr (sizeof(T) == 1) {
+                return static_cast<T>(consume_byte());
+            } else {
+                typename std::conditional<sizeof(T) == 2, uint16_t, typename std::conditional<sizeof(T) == 4, uint32_t, uint64_t>::type>::type raw_be_val = 0;
+
+                consume_bytes(&raw_be_val, sizeof(raw_be_val));
+
+                if constexpr (sizeof(T) == 2) {
+                    host_val = static_cast<T>(detail::be_to_host(static_cast<uint16_t>(raw_be_val)));  // Uses byte_order_utils.h
+                } else if constexpr (sizeof(T) == 4) {
+                    host_val = static_cast<T>(detail::be_to_host(static_cast<uint32_t>(raw_be_val)));  // Uses byte_order_utils.h
+                } else if constexpr (sizeof(T) == 8) {
+                    host_val = static_cast<T>(detail::be_to_host(static_cast<uint64_t>(raw_be_val)));  // Uses byte_order_utils.h
+                } else {
+                    static_assert(sizeof(T) == 1 || sizeof(T) == 2 || sizeof(T) == 4 || sizeof(T) == 8, "Unsupported integer size for consume_network_int.");
+                }
+                return host_val;
+            }
+        }
+
+        void set_error(BoltError error);
+        [[noreturn]] void throw_deserialization_error(const std::string& message, BoltError error_code = BoltError::DESERIALIZATION_ERROR);
+
+        // Type-specific reader helpers (implementations in packstream_reader_types.cpp)
+        Value read_float64_value();
+        Value read_integer_value(uint8_t marker);
+        Value read_string_value(uint8_t marker);
+        BoltError read_string_data_into(std::string& out_string, uint32_t size);
+        Value read_list_value(uint8_t marker);
+        BoltError read_list_elements_into(BoltList& list, uint32_t size);
+        Value read_map_value(uint8_t marker);
+        BoltError read_map_pairs_into(BoltMap& map, uint32_t size);
+        Value read_struct_value(uint8_t marker);
+        BoltError read_struct_fields_into(PackStreamStructure& structure, uint8_t tag, uint32_t size);
+
+        const std::vector<uint8_t>* buffer_ptr_ = nullptr;
+        std::istream* stream_ptr_ = nullptr;
+        size_t buffer_pos_ = 0;
+        BoltError error_state_ = BoltError::SUCCESS;
+    };
+
+}  // namespace boltprotocol
+
+#endif  // BOLT_PROTOCOL_IMPL_PACKSTREAM_READER_H#ifndef BOLT_PROTOCOL_IMPL_PACKSTREAM_WRITER_H
+#define BOLT_PROTOCOL_IMPL_PACKSTREAM_WRITER_H
+
+#include <cstdint>
+#include <iosfwd>
+#include <string>
+#include <type_traits>  // For std::is_integral_v, std::is_enum_v
+#include <vector>
+
+#include "boltprotocol/detail/byte_order_utils.h"  // Include the new utility header
+#include "boltprotocol/message_defs.h"
+#include "boltprotocol/packstream_constants.h"
+
+namespace boltprotocol {
+
+    class PackStreamWriter {
+      public:
+        explicit PackStreamWriter(std::vector<uint8_t>& buffer);
+        explicit PackStreamWriter(std::ostream& stream);
+
+        BoltError write(const Value& value);
+
+        // Type-specific internal writers (implementations in packstream_writer_types.cpp)
+        BoltError write_null_internal();
+        BoltError write_boolean_internal(bool value);
+        BoltError write_integer_internal(int64_t value);
+        BoltError write_float_internal(double value);
+        BoltError write_string_header_internal(uint32_t size);
+        BoltError write_string_data_internal(const std::string& value_str);
+        BoltError serialize_string_internal(const std::string& value);
+        BoltError write_list_header_internal(uint32_t size);
+        BoltError serialize_list_internal(const BoltList& list_data);
+        BoltError write_map_header_internal(uint32_t size);
+        BoltError serialize_map_internal(const BoltMap& map_data);
+        BoltError write_struct_header_internal(uint8_t tag, uint32_t size);
+        BoltError serialize_structure_internal(const PackStreamStructure& struct_data);
+
+      private:
+        void append_byte(uint8_t byte);
+        void append_bytes(const void* data, size_t size);
+
+        template <typename T>
+        void append_network_int(T value) {
+            static_assert(std::is_integral_v<T> || std::is_enum_v<T>, "append_network_int requires an integral or enum type.");
+            if constexpr (sizeof(T) == 1) {
+                append_byte(static_cast<uint8_t>(value));
+            } else if constexpr (sizeof(T) == 2) {
+                uint16_t be_val = detail::host_to_be(static_cast<uint16_t>(value));  // Uses byte_order_utils.h
+                append_bytes(&be_val, sizeof(be_val));
+            } else if constexpr (sizeof(T) == 4) {
+                uint32_t be_val = detail::host_to_be(static_cast<uint32_t>(value));  // Uses byte_order_utils.h
+                append_bytes(&be_val, sizeof(be_val));
+            } else if constexpr (sizeof(T) == 8) {
+                uint64_t be_val = detail::host_to_be(static_cast<uint64_t>(value));  // Uses byte_order_utils.h
+                append_bytes(&be_val, sizeof(be_val));
+            } else {
+                static_assert(sizeof(T) == 1 || sizeof(T) == 2 || sizeof(T) == 4 || sizeof(T) == 8, "Unsupported integer size for append_network_int.");
+            }
+        }
+
+        std::vector<uint8_t>* buffer_ptr_ = nullptr;
+        std::ostream* stream_ptr_ = nullptr;
+    };
+
+}  // namespace boltprotocol
+
+#endif  // BOLT_PROTOCOL_IMPL_PACKSTREAM_WRITER_H#include "boltprotocol/message_defs.h"
+
+#include <algorithm>
+#include <cstring>
+#include <functional>   // For std::visit (though variant includes it)
+#include <type_traits>  // For std::decay_t
+
+#if defined(_WIN32) || defined(_WIN64)
+#include <winsock2.h>
+#pragma comment(lib, "Ws2_32.lib")
+#else
+#include <arpa/inet.h>  // For ntohl, htonl
+#endif
+
+namespace boltprotocol {
+
+    // Implementation for Value's equality operator
+    bool operator==(const Value& lhs, const Value& rhs) {
+        if (lhs.index() != rhs.index()) {
+            return false;
+        }
+
+        return std::visit(
+            [&rhs](const auto& lhs_val_variant_alternative) -> bool {
+                // Get the same type from rhs. This is safe because index() matched.
+                using T_alt = std::decay_t<decltype(lhs_val_variant_alternative)>;
+                const T_alt& rhs_val_variant_alternative = std::get<T_alt>(rhs);
+
+                // Handle shared_ptr cases specifically: compare pointed-to values
+                if constexpr (std::is_same_v<T_alt, std::shared_ptr<BoltList>>) {
+                    // Both null: equal. One null, other not: not equal. Both non-null: compare contents.
+                    if (static_cast<bool>(lhs_val_variant_alternative) != static_cast<bool>(rhs_val_variant_alternative)) return false;
+                    if (!lhs_val_variant_alternative) return true;  // Both are null
+                    return *lhs_val_variant_alternative == *rhs_val_variant_alternative;
+                } else if constexpr (std::is_same_v<T_alt, std::shared_ptr<BoltMap>>) {
+                    if (static_cast<bool>(lhs_val_variant_alternative) != static_cast<bool>(rhs_val_variant_alternative)) return false;
+                    if (!lhs_val_variant_alternative) return true;
+                    return *lhs_val_variant_alternative == *rhs_val_variant_alternative;
+                } else if constexpr (std::is_same_v<T_alt, std::shared_ptr<PackStreamStructure>>) {
+                    if (static_cast<bool>(lhs_val_variant_alternative) != static_cast<bool>(rhs_val_variant_alternative)) return false;
+                    if (!lhs_val_variant_alternative) return true;
+                    return *lhs_val_variant_alternative == *rhs_val_variant_alternative;
+                } else {
+                    // For non-shared_ptr types (nullptr_t, bool, int64_t, double, string)
+                    return lhs_val_variant_alternative == rhs_val_variant_alternative;
+                }
+            },
+            lhs);
+    }
+
+    const std::string DEFAULT_USER_AGENT_FORMAT_STRING = "MyCppBoltDriver/0.1.0";  // Example version
+
+    namespace versions {
+
+        // Helper to convert uint32_t to big-endian byte array
+        std::array<uint8_t, 4> u32_to_be_bytes(uint32_t val) {
+            std::array<uint8_t, 4> bytes;
+            uint32_t be_val = htonl(val);  // Convert host to network byte order (big endian)
+            std::memcpy(bytes.data(), &be_val, sizeof(uint32_t));
+            return bytes;
+        }
+
+        uint32_t Version::to_handshake_int() const {
+            return static_cast<uint32_t>((static_cast<uint32_t>(minor) << 8) | static_cast<uint32_t>(major));
+        }
+
+        std::array<uint8_t, 4> Version::to_handshake_bytes() const {
+            uint32_t val = to_handshake_int();
+            return u32_to_be_bytes(val);
+        }
+
+        bool Version::operator<(const Version& other) const {
+            if (major != other.major) {
+                return major < other.major;
+            }
+            return minor < other.minor;
+        }
+
+        bool Version::operator==(const Version& other) const {
+            return major == other.major && minor == other.minor;
+        }
+
+        bool Version::operator!=(const Version& other) const {
+            return !(*this == other);
+        }
+
+        const Version V5_4 = {5, 4};
+        const Version V5_3 = {5, 3};
+        const Version V5_2 = {5, 2};
+        const Version V5_1 = {5, 1};
+        const Version V5_0 = {5, 0};
+        const Version V4_4 = {4, 4};
+        const Version V4_3 = {4, 3};
+        const Version V4_2 = {4, 2};
+
+        static const std::vector<Version> DEFAULT_PROPOSED_VERSIONS = {V5_4, V5_3, V5_2, V5_1, V5_0, V4_4, V4_3, V4_2};
+
+        const std::vector<Version>& get_default_proposed_versions() {
+            return DEFAULT_PROPOSED_VERSIONS;
+        }
+
+    }  // namespace versions
+
+}  // namespace boltprotocol#include <map>
+#include <memory>  // For std::make_shared
+#include <vector>  // For PackStreamStructure::fields
+
+#include "boltprotocol/message_defs.h"
+#include "boltprotocol/message_serialization.h"
+#include "boltprotocol/packstream_writer.h"
+
+namespace boltprotocol {
+
+    // With Value now using std::shared_ptr, it becomes copyable (as long as other
+    // alternatives are also copyable, which they are).
+    // This means `map_for_field_ptr->pairs.emplace(p.first, p.second);`
+    // will now correctly copy-construct the Value `p.second` into the map.
+
+    BoltError serialize_hello_message(const HelloMessageParams& params, PackStreamWriter& writer) {
+        PackStreamStructure pss_hello;
+        pss_hello.tag = static_cast<uint8_t>(MessageTag::HELLO);
+
+        // The field of HELLO is a map. This map comes from params.extra_auth_tokens.
+        // Create a BoltMap for this field.
+        auto map_for_field_ptr = std::make_shared<BoltMap>();
+        // Since Value is now copyable (due to shared_ptr), this emplace works.
+        for (const auto& p : params.extra_auth_tokens) {
+            map_for_field_ptr->pairs.emplace(p.first, p.second);
+        }
+
+        // Wrap the shared_ptr<BoltMap> in a Value
+        Value map_value_as_field(std::move(map_for_field_ptr));  // Construct Value with shared_ptr
+        pss_hello.fields.emplace_back(std::move(map_value_as_field));
+
+        // Wrap the PackStreamStructure in a shared_ptr, then in a Value for the writer
+        return writer.write(Value(std::make_shared<PackStreamStructure>(std::move(pss_hello))));
+    }
+
+    BoltError serialize_run_message(const RunMessageParams& params, PackStreamWriter& writer) {
+        PackStreamStructure run_struct_raw;
+        run_struct_raw.tag = static_cast<uint8_t>(MessageTag::RUN);
+
+        // Field 1: Cypher query (string)
+        run_struct_raw.fields.emplace_back(Value(params.cypher_query));
+
+        // Field 2: Parameters map
+        auto parameters_map_ptr = std::make_shared<BoltMap>();
+        for (const auto& p : params.parameters) {
+            parameters_map_ptr->pairs.emplace(p.first, p.second);  // Value is copyable
+        }
+        run_struct_raw.fields.emplace_back(Value(std::move(parameters_map_ptr)));
+
+        // Field 3: Extra metadata map
+        auto extra_metadata_map_ptr = std::make_shared<BoltMap>();
+        for (const auto& p : params.extra_metadata) {
+            extra_metadata_map_ptr->pairs.emplace(p.first, p.second);  // Value is copyable
+        }
+        run_struct_raw.fields.emplace_back(Value(std::move(extra_metadata_map_ptr)));
+
+        return writer.write(Value(std::make_shared<PackStreamStructure>(std::move(run_struct_raw))));
+    }
+
+    BoltError serialize_pull_message(const PullMessageParams& params, PackStreamWriter& writer) {
+        PackStreamStructure pull_struct_raw;
+        pull_struct_raw.tag = static_cast<uint8_t>(MessageTag::PULL);
+
+        auto extra_map_ptr = std::make_shared<BoltMap>();
+        if (params.n.has_value()) {
+            extra_map_ptr->pairs.emplace("n", Value(params.n.value()));
+        }
+        if (params.qid.has_value()) {
+            extra_map_ptr->pairs.emplace("qid", Value(params.qid.value()));
+        }
+
+        pull_struct_raw.fields.emplace_back(Value(std::move(extra_map_ptr)));
+
+        return writer.write(Value(std::make_shared<PackStreamStructure>(std::move(pull_struct_raw))));
+    }
+
+    BoltError serialize_discard_message(const DiscardMessageParams& params, PackStreamWriter& writer) {
+        PackStreamStructure discard_struct_raw;
+        discard_struct_raw.tag = static_cast<uint8_t>(MessageTag::DISCARD);
+
+        auto extra_map_ptr = std::make_shared<BoltMap>();
+        if (params.n.has_value()) {
+            extra_map_ptr->pairs.emplace("n", Value(params.n.value()));
+        }
+        if (params.qid.has_value()) {
+            extra_map_ptr->pairs.emplace("qid", Value(params.qid.value()));
+        }
+
+        discard_struct_raw.fields.emplace_back(Value(std::move(extra_map_ptr)));
+
+        return writer.write(Value(std::make_shared<PackStreamStructure>(std::move(discard_struct_raw))));
+    }
+
+    BoltError serialize_goodbye_message(PackStreamWriter& writer) {
+        PackStreamStructure goodbye_struct_raw;
+        goodbye_struct_raw.tag = static_cast<uint8_t>(MessageTag::GOODBYE);
+        // No fields for GOODBYE
+        return writer.write(Value(std::make_shared<PackStreamStructure>(std::move(goodbye_struct_raw))));
+    }
+
+    BoltError serialize_reset_message(PackStreamWriter& writer) {
+        PackStreamStructure reset_struct_raw;
+        reset_struct_raw.tag = static_cast<uint8_t>(MessageTag::RESET);
+        // No fields for RESET
+        return writer.write(Value(std::make_shared<PackStreamStructure>(std::move(reset_struct_raw))));
+    }
+
+}  // namespace boltprotocol#include <map>
+#include <memory>   // For std::shared_ptr
+#include <variant>  // For std::holds_alternative, std::get
+#include <vector>   // For PackStreamStructure::fields
+
+#include "boltprotocol/message_defs.h"
+#include "boltprotocol/message_serialization.h"
+#include "boltprotocol/packstream_reader.h"
+
+namespace boltprotocol {
+
+    // Helper to deserialize a structure from a reader and validate its basic properties
+    BoltError deserialize_message_structure_prelude(PackStreamReader& reader, MessageTag expected_tag, size_t expected_fields_min, size_t expected_fields_max,
+                                                    PackStreamStructure& out_structure) {  // out_structure is now an lvalue reference
+        Value raw_value;
+        BoltError err = reader.read(raw_value);
+        if (err != BoltError::SUCCESS) {
+            return err;
+        }
+
+        // Check and get the shared_ptr<PackStreamStructure>
+        if (!std::holds_alternative<std::shared_ptr<PackStreamStructure>>(raw_value)) {  // Use shared_ptr
+            return BoltError::INVALID_MESSAGE_FORMAT;
+        }
+
+        // Move the shared_ptr out of the variant.
+        std::shared_ptr<PackStreamStructure> struct_shared_ptr = std::get<std::shared_ptr<PackStreamStructure>>(std::move(raw_value));  // Use shared_ptr
+
+        if (!struct_shared_ptr) {
+            return BoltError::INVALID_MESSAGE_FORMAT;
+        }
+        // Move the contents from the object pointed to by shared_ptr into out_structure.
+        // This assumes out_structure is ready to take ownership of the fields.
+        // If out_structure was meant to share ownership, it would be a shared_ptr itself.
+        // Given it's a PackStreamStructure&, we move the fields.
+        out_structure = std::move(*struct_shared_ptr);
+
+        if (static_cast<MessageTag>(out_structure.tag) != expected_tag) {
+            return BoltError::INVALID_MESSAGE_FORMAT;
+        }
+
+        if (out_structure.fields.size() < expected_fields_min || out_structure.fields.size() > expected_fields_max) {
+            return BoltError::INVALID_MESSAGE_FORMAT;
+        }
+
+        return BoltError::SUCCESS;
+    }
+
+    BoltError deserialize_success_message(PackStreamReader& reader, SuccessMessageParams& out_params) {
+        PackStreamStructure success_struct_contents;  // To hold the moved contents
+        BoltError err = deserialize_message_structure_prelude(reader, MessageTag::SUCCESS, 1, 1, success_struct_contents);
+        if (err != BoltError::SUCCESS) {
+            return err;
+        }
+
+        // Field 0: metadata map
+        // Ensure the first field actually holds a shared_ptr<BoltMap>
+        if (success_struct_contents.fields.empty() || !std::holds_alternative<std::shared_ptr<BoltMap>>(success_struct_contents.fields[0])) {  // Use shared_ptr
+            return BoltError::INVALID_MESSAGE_FORMAT;
+        }
+
+        // Move the shared_ptr<BoltMap> from the fields vector
+        std::shared_ptr<BoltMap> metadata_map_shared_ptr = std::get<std::shared_ptr<BoltMap>>(std::move(success_struct_contents.fields[0]));  // Use shared_ptr
+        if (!metadata_map_shared_ptr) {
+            return BoltError::INVALID_MESSAGE_FORMAT;
+        }
+
+        // Move the pairs from the BoltMap object into out_params.metadata
+        out_params.metadata = std::move(metadata_map_shared_ptr->pairs);
+        return BoltError::SUCCESS;
+    }
+
+    BoltError deserialize_failure_message(PackStreamReader& reader, FailureMessageParams& out_params) {
+        PackStreamStructure failure_struct_contents;
+        BoltError err = deserialize_message_structure_prelude(reader, MessageTag::FAILURE, 1, 1, failure_struct_contents);
+        if (err != BoltError::SUCCESS) {
+            return err;
+        }
+
+        if (failure_struct_contents.fields.empty() || !std::holds_alternative<std::shared_ptr<BoltMap>>(failure_struct_contents.fields[0])) {  // Use shared_ptr
+            return BoltError::INVALID_MESSAGE_FORMAT;
+        }
+        std::shared_ptr<BoltMap> metadata_map_shared_ptr = std::get<std::shared_ptr<BoltMap>>(std::move(failure_struct_contents.fields[0]));  // Use shared_ptr
+        if (!metadata_map_shared_ptr) return BoltError::INVALID_MESSAGE_FORMAT;
+
+        out_params.metadata = std::move(metadata_map_shared_ptr->pairs);
+        return BoltError::SUCCESS;
+    }
+
+    BoltError deserialize_record_message(PackStreamReader& reader, RecordMessageParams& out_params) {
+        PackStreamStructure record_struct_contents;
+        BoltError err = deserialize_message_structure_prelude(reader, MessageTag::RECORD, 1, 1, record_struct_contents);
+        if (err != BoltError::SUCCESS) {
+            return err;
+        }
+
+        if (record_struct_contents.fields.empty() || !std::holds_alternative<std::shared_ptr<BoltList>>(record_struct_contents.fields[0])) {  // Use shared_ptr
+            return BoltError::INVALID_MESSAGE_FORMAT;
+        }
+        std::shared_ptr<BoltList> fields_list_shared_ptr = std::get<std::shared_ptr<BoltList>>(std::move(record_struct_contents.fields[0]));  // Use shared_ptr
+        if (!fields_list_shared_ptr) return BoltError::INVALID_MESSAGE_FORMAT;
+
+        out_params.fields = std::move(fields_list_shared_ptr->elements);
+        return BoltError::SUCCESS;
+    }
+
+    BoltError deserialize_ignored_message(PackStreamReader& reader) {
+        PackStreamStructure ignored_struct_contents;
+        BoltError err = deserialize_message_structure_prelude(reader, MessageTag::IGNORED, 0, 1, ignored_struct_contents);
+        if (err != BoltError::SUCCESS) {
+            return err;
+        }
+
+        if (!ignored_struct_contents.fields.empty()) {                                                   // If there's one field (optional metadata map)
+            if (!std::holds_alternative<std::shared_ptr<BoltMap>>(ignored_struct_contents.fields[0])) {  // Use shared_ptr
+                return BoltError::INVALID_MESSAGE_FORMAT;
+            }
+            // We don't need to store the (empty) map for IGNORED.
+        }
+
+        return BoltError::SUCCESS;
+    }
+
+    BoltError peek_message_structure_header(PackStreamReader& /*reader*/, uint8_t& /*out_tag*/, uint32_t& /*out_fields_count*/) {
+        // Implementation of this function would need careful consideration of reader state
+        // or a reader that supports non-consuming peeks of structured data.
+        // For now, the deserialize_message_structure_prelude handles the initial read and check.
+        return BoltError::UNKNOWN_ERROR;  // Placeholder
+    }
+
+}  // namespace boltprotocol#include "boltprotocol/packstream_reader.h"
+
+#include <cstring>    // For memcpy
+#include <iostream>   // For std::istream operations
+#include <stdexcept>  // For std::out_of_range, std::runtime_error
+// packstream_constants.h and message_defs.h are included via packstream_reader.h
+
+namespace boltprotocol {
+
+    // --- PackStreamReader Constructor and Basic IO ---
+
+    PackStreamReader::PackStreamReader(const std::vector<uint8_t>& buffer) : buffer_ptr_(&buffer), buffer_pos_(0), error_state_(BoltError::SUCCESS) {
+    }
+
+    PackStreamReader::PackStreamReader(std::istream& stream) : stream_ptr_(&stream), buffer_pos_(0), error_state_(BoltError::SUCCESS) {
+    }
+
+    void PackStreamReader::set_error(BoltError error) {
+        if (error_state_ == BoltError::SUCCESS && error != BoltError::SUCCESS) {
+            error_state_ = error;
+        }
+    }
+
+    void PackStreamReader::throw_deserialization_error(const std::string& message, BoltError error_code) {
+        set_error(error_code);
+        throw std::runtime_error("PackStreamReader (" + std::to_string(static_cast<int>(error_code)) + "): " + message);
+    }
+
+    bool PackStreamReader::eof() const {
+        if (has_error()) return true;
+        if (buffer_ptr_) {
+            return buffer_pos_ >= buffer_ptr_->size();
+        }
+        if (stream_ptr_) {
+            return stream_ptr_->eof() || (stream_ptr_->peek() == EOF && stream_ptr_->gcount() == 0);
+        }
+        return true;
+    }
+
+    uint8_t PackStreamReader::peek_byte() {
+        if (has_error()) throw_deserialization_error("Attempt to peek byte while in error state.");
+        if (buffer_ptr_) {
+            if (buffer_pos_ < buffer_ptr_->size()) {
+                return (*buffer_ptr_)[buffer_pos_];
+            }
+            throw_deserialization_error("Buffer read out of bounds (peek_byte).", BoltError::DESERIALIZATION_ERROR);
+        }
+        if (stream_ptr_) {
+            int byte = stream_ptr_->peek();
+            if (byte == EOF) {
+                if (stream_ptr_->bad()) throw_deserialization_error("Stream error (peek_byte).", BoltError::NETWORK_ERROR);
+                throw_deserialization_error("Stream EOF encountered (peek_byte).", BoltError::DESERIALIZATION_ERROR);
+            }
+            return static_cast<uint8_t>(byte);
+        }
+        throw_deserialization_error("No input source initialized (peek_byte).", BoltError::INVALID_ARGUMENT);
+    }
+
+    uint8_t PackStreamReader::consume_byte() {
+        if (has_error()) throw_deserialization_error("Attempt to consume byte while in error state.");
+        if (buffer_ptr_) {
+            if (buffer_pos_ < buffer_ptr_->size()) {
+                return (*buffer_ptr_)[buffer_pos_++];
+            }
+            throw_deserialization_error("Buffer read out of bounds (consume_byte).", BoltError::DESERIALIZATION_ERROR);
+        }
+        if (stream_ptr_) {
+            int byte = stream_ptr_->get();
+            if (byte == EOF) {
+                if (stream_ptr_->bad()) throw_deserialization_error("Stream error (consume_byte).", BoltError::NETWORK_ERROR);
+                throw_deserialization_error("Stream EOF encountered (consume_byte).", BoltError::DESERIALIZATION_ERROR);
+            }
+            return static_cast<uint8_t>(byte);
+        }
+        throw_deserialization_error("No input source initialized (consume_byte).", BoltError::INVALID_ARGUMENT);
+    }
+
+    void PackStreamReader::consume_bytes(void* dest, size_t size) {
+        if (size == 0) return;
+        if (has_error()) throw_deserialization_error("Attempt to consume bytes while in error state.");
+
+        if (buffer_ptr_) {
+            if (buffer_pos_ + size <= buffer_ptr_->size()) {
+                std::memcpy(dest, buffer_ptr_->data() + buffer_pos_, size);
+                buffer_pos_ += size;
+            } else {
+                throw_deserialization_error("Buffer read out of bounds (consume_bytes).", BoltError::DESERIALIZATION_ERROR);
+            }
+        } else if (stream_ptr_) {
+            stream_ptr_->read(static_cast<char*>(dest), static_cast<std::streamsize>(size));
+            if (stream_ptr_->gcount() != static_cast<std::streamsize>(size)) {
+                if (stream_ptr_->bad()) throw_deserialization_error("Stream error (consume_bytes).", BoltError::NETWORK_ERROR);
+                throw_deserialization_error("Stream read failed or not enough data (consume_bytes).", BoltError::DESERIALIZATION_ERROR);
+            }
+        } else {
+            throw_deserialization_error("No input source initialized (consume_bytes).", BoltError::INVALID_ARGUMENT);
+        }
+    }
+
+    // REMOVED: Definition and explicit instantiations of consume_network_int
+    // The definition is now fully in packstream_reader.h
+
+    // --- PackStreamReader Main Read Logic ---
+
+    Value PackStreamReader::read() {
+        if (eof()) {
+            throw_deserialization_error("Attempt to read past EOF.");
+        }
+        uint8_t marker = consume_byte();
+
+        if (marker >= 0xF0) {
+            return static_cast<int64_t>(static_cast<int8_t>(marker));
+        }
+        if (marker <= 0x7F) {
+            return static_cast<int64_t>(marker);
+        }
+
+        switch (marker) {
+            case MARKER_NULL:
+                return nullptr;
+            case MARKER_FALSE:
+                return false;
+            case MARKER_TRUE:
+                return true;
+
+            case MARKER_FLOAT64:
+                return read_float64_value();
+
+            case MARKER_INT_8:
+            case MARKER_INT_16:
+            case MARKER_INT_32:
+            case MARKER_INT_64:
+                return read_integer_value(marker);
+
+            case MARKER_TINY_STRING_BASE ...(MARKER_TINY_STRING_BASE + 0x0F):
+            case MARKER_STRING_8:
+            case MARKER_STRING_16:
+            case MARKER_STRING_32:
+                return read_string_value(marker);
+
+            case MARKER_TINY_LIST_BASE ...(MARKER_TINY_LIST_BASE + 0x0F):
+            case MARKER_LIST_8:
+            case MARKER_LIST_16:
+            case MARKER_LIST_32:
+                return read_list_value(marker);
+
+            case MARKER_TINY_MAP_BASE ...(MARKER_TINY_MAP_BASE + 0x0F):
+            case MARKER_MAP_8:
+            case MARKER_MAP_16:
+            case MARKER_MAP_32:
+                return read_map_value(marker);
+
+            case MARKER_TINY_STRUCT_BASE ...(MARKER_TINY_STRUCT_BASE + 0x0F):
+            case MARKER_STRUCT_8:
+            case MARKER_STRUCT_16:
+                return read_struct_value(marker);
+
+            default:
+                throw_deserialization_error("Unknown PackStream marker: 0x" + std::to_string(marker), BoltError::INVALID_MESSAGE_FORMAT);
+        }
+    }
+
+    BoltError PackStreamReader::read(Value& out_value) {
+        BoltError prior_error = error_state_;
+        error_state_ = BoltError::SUCCESS;
+        try {
+            out_value = read();
+            return error_state_;
+        } catch (const std::runtime_error& /* e */) {
+            if (error_state_ == BoltError::SUCCESS) {
+                error_state_ = BoltError::UNKNOWN_ERROR;
+            }
+            return error_state_;
+        } catch (...) {
+            set_error(BoltError::UNKNOWN_ERROR);
+            return error_state_;
+        }
+    }
+
+}  // namespace boltprotocol#include <cstring>    // For memcpy
+#include <map>        // For std::map in BoltMap
+#include <stdexcept>  // For std::runtime_error, std::bad_alloc
+#include <string>     // For std::string
+#include <vector>     // For std::vector in read_list_elements_into
+
+#include "boltprotocol/packstream_reader.h"  // Also includes message_defs.h and packstream_constants.h
+
+namespace boltprotocol {
+
+    // --- PackStreamReader Type-Specific Reader Implementations ---
+
+    Value PackStreamReader::read_float64_value() {
+        // consume_network_int will throw if it fails (e.g. EOF or stream error)
+        uint64_t temp_int = consume_network_int<uint64_t>();  // Can throw
+        double val;
+        static_assert(sizeof(double) == sizeof(uint64_t), "Double is not 64-bit.");
+        std::memcpy(&val, &temp_int, sizeof(double));
+        return val;
+    }
+
+    Value PackStreamReader::read_integer_value(uint8_t marker) {
+        // consume_network_int will throw if it fails
+        switch (marker) {
+            case MARKER_INT_8:
+                return static_cast<int64_t>(consume_network_int<int8_t>());
+            case MARKER_INT_16:
+                return static_cast<int64_t>(consume_network_int<int16_t>());
+            case MARKER_INT_32:
+                return static_cast<int64_t>(consume_network_int<int32_t>());
+            case MARKER_INT_64:
+                return consume_network_int<int64_t>();
+            default:
+                // This case should ideally not be reached if the main dispatcher in read() is correct.
+                throw_deserialization_error("Invalid marker passed to read_integer_value: 0x" + std::to_string(marker), BoltError::INVALID_ARGUMENT);
+        }
+    }
+
+    BoltError PackStreamReader::read_string_data_into(std::string& out_string, uint32_t size) {
+        if (size == 0) {
+            out_string.clear();
+            return BoltError::SUCCESS;
+        }
+        try {
+            // std::string::resize can throw std::bad_alloc or std::length_error
+            out_string.resize(size);
+            consume_bytes(&out_string[0], size);  // Can throw (e.g., EOF, stream error)
+        } catch (const std::bad_alloc&) {
+            set_error(BoltError::DESERIALIZATION_ERROR);  // Or a more specific out-of-memory error
+            // Let the exception propagate upwards to be caught by PackStreamReader::read(Value&)
+            throw;
+        } catch (const std::length_error&) {  // Should be rare for typical string sizes in Bolt
+            set_error(BoltError::DESERIALIZATION_ERROR);
+            throw;
+        } catch (const std::runtime_error&) {
+            // consume_bytes already called set_error and threw.
+            // The error_state_ is already set. We just need to let this exception propagate.
+            // out_string might be in a partially valid state if consume_bytes only read some.
+            // Clearing it ensures consistent state on error.
+            out_string.clear();
+            throw;  // Rethrow the runtime_error from consume_bytes
+        }
+        // If no exceptions, it was successful.
+        return BoltError::SUCCESS;
+    }
+
+    Value PackStreamReader::read_string_value(uint8_t marker) {
+        uint32_t size = 0;
+        // Determine size from marker
+        if ((marker & 0xF0) == MARKER_TINY_STRING_BASE) {  // Tiny String 0x80 - 0x8F
+            size = marker & 0x0F;
+        } else {
+            // consume_network_int will throw on error/EOF
+            switch (marker) {
+                case MARKER_STRING_8:
+                    size = consume_network_int<uint8_t>();
+                    break;
+                case MARKER_STRING_16:
+                    size = consume_network_int<uint16_t>();
+                    break;
+                case MARKER_STRING_32:
+                    size = consume_network_int<uint32_t>();
+                    break;
+                default:
+                    throw_deserialization_error("Invalid marker passed to read_string_value: 0x" + std::to_string(marker), BoltError::INVALID_ARGUMENT);
+            }
+        }
+
+        std::string s;
+        // read_string_data_into can throw (bad_alloc from resize, or runtime_error from consume_bytes)
+        // These exceptions will be caught by the try-catch in the public PackStreamReader::read(Value&) method.
+        BoltError err_code = read_string_data_into(s, size);
+        if (err_code != BoltError::SUCCESS) {
+            // This path implies read_string_data_into set an error but didn't throw,
+            // which is inconsistent with its current design that relies on consume_bytes throwing.
+            // For robustness, if it could return an error, handle it here.
+            // Given current design, this should not be hit if read_string_data_into itself throws.
+            throw_deserialization_error("Failed to read string data after header. Error: " + std::to_string(static_cast<int>(err_code)), err_code);
+        }
+        return s;
+    }
+
+    BoltError PackStreamReader::read_list_elements_into(BoltList& list, uint32_t size) {
+        try {
+            list.elements.reserve(size);  // Pre-allocate, might throw std::bad_alloc
+        } catch (const std::bad_alloc&) {
+            set_error(BoltError::DESERIALIZATION_ERROR);  // Or specific out-of-memory
+            throw;
+        }
+
+        for (uint32_t i = 0; i < size; ++i) {
+            // PackStreamReader::read() (the main one) is called recursively here.
+            // It will throw if an error occurs reading an element.
+            // These exceptions are caught by the try-catch in the top-level public read(Value&).
+            list.elements.push_back(read());
+            // If read() above threw, we wouldn't reach here.
+            // The has_error() check is a defensive measure, in case read() could set an error
+            // without throwing (which is not its current primary error reporting mechanism).
+            if (has_error()) {
+                return get_error();  // Propagate the error code set by the recursive read() call.
+            }
+        }
+        return BoltError::SUCCESS;
+    }
+
+    Value PackStreamReader::read_list_value(uint8_t marker) {
+        uint32_t size = 0;
+        if ((marker & 0xF0) == MARKER_TINY_LIST_BASE) {  // Tiny List 0x90 - 0x9F
+            size = marker & 0x0F;
+        } else {
+            // consume_network_int will throw on error/EOF
+            switch (marker) {
+                case MARKER_LIST_8:
+                    size = consume_network_int<uint8_t>();
+                    break;
+                case MARKER_LIST_16:
+                    size = consume_network_int<uint16_t>();
+                    break;
+                case MARKER_LIST_32:
+                    size = consume_network_int<uint32_t>();
+                    break;
+                default:
+                    throw_deserialization_error("Invalid marker passed to read_list_value: 0x" + std::to_string(marker), BoltError::INVALID_ARGUMENT);
+            }
+        }
+
+        std::unique_ptr<BoltList> list_ptr;
+        try {
+            list_ptr = std::make_unique<BoltList>();  // Can throw std::bad_alloc
+        } catch (const std::bad_alloc&) {
+            set_error(BoltError::DESERIALIZATION_ERROR);
+            throw;
+        }
+
+        // read_list_elements_into can throw (bad_alloc from reserve, or from element read())
+        // These exceptions will be caught by the try-catch in the public PackStreamReader::read(Value&) method.
+        BoltError err_code = read_list_elements_into(*list_ptr, size);
+        if (err_code != BoltError::SUCCESS) {
+            throw_deserialization_error("Failed to read list elements after header. Error: " + std::to_string(static_cast<int>(err_code)), err_code);
+        }
+        return list_ptr;
+    }
+
+    BoltError PackStreamReader::read_map_pairs_into(BoltMap& map_obj, uint32_t size) {
+        for (uint32_t i = 0; i < size; ++i) {
+            // Read map key (must be string)
+            // PackStreamReader::read() (main) will throw if an error occurs.
+            Value key_val = read();
+            if (has_error()) {  // Defensive check
+                return get_error();
+            }
+
+            if (!std::holds_alternative<std::string>(key_val)) {
+                // Set error and throw. This specific error is logical, not from basic IO.
+                throw_deserialization_error("Map key is not a string.", BoltError::INVALID_MESSAGE_FORMAT);
+            }
+            // Using std::move on the string from std::get is efficient.
+            std::string key = std::get<std::string>(std::move(key_val));
+
+            // Read map value, also using the main read() which can throw.
+            map_obj.pairs[std::move(key)] = read();
+            if (has_error()) {  // Defensive check
+                return get_error();
+            }
+        }
+        return BoltError::SUCCESS;
+    }
+
+    Value PackStreamReader::read_map_value(uint8_t marker) {
+        uint32_t size = 0;
+        if ((marker & 0xF0) == MARKER_TINY_MAP_BASE) {  // Tiny Map 0xA0 - 0xAF
+            size = marker & 0x0F;
+        } else {
+            // consume_network_int will throw on error/EOF
+            switch (marker) {
+                case MARKER_MAP_8:
+                    size = consume_network_int<uint8_t>();
+                    break;
+                case MARKER_MAP_16:
+                    size = consume_network_int<uint16_t>();
+                    break;
+                case MARKER_MAP_32:
+                    size = consume_network_int<uint32_t>();
+                    break;
+                default:
+                    throw_deserialization_error("Invalid marker passed to read_map_value: 0x" + std::to_string(marker), BoltError::INVALID_ARGUMENT);
+            }
+        }
+
+        std::unique_ptr<BoltMap> map_ptr;
+        try {
+            map_ptr = std::make_unique<BoltMap>();  // Can throw std::bad_alloc
+        } catch (const std::bad_alloc&) {
+            set_error(BoltError::DESERIALIZATION_ERROR);
+            throw;
+        }
+
+        // read_map_pairs_into can throw (e.g. bad_alloc, error from recursive read(), map key not string)
+        // These exceptions will be caught by the try-catch in the public PackStreamReader::read(Value&) method.
+        BoltError err_code = read_map_pairs_into(*map_ptr, size);
+        if (err_code != BoltError::SUCCESS) {
+            throw_deserialization_error("Failed to read map pairs after header. Error: " + std::to_string(static_cast<int>(err_code)), err_code);
+        }
+        return map_ptr;
+    }
+
+    BoltError PackStreamReader::read_struct_fields_into(PackStreamStructure& structure, uint8_t tag, uint32_t size) {
+        structure.tag = tag;
+        try {
+            structure.fields.reserve(size);  // Can throw std::bad_alloc
+        } catch (const std::bad_alloc&) {
+            set_error(BoltError::DESERIALIZATION_ERROR);
+            throw;
+        }
+
+        for (uint32_t i = 0; i < size; ++i) {
+            // Main read() will throw on error.
+            structure.fields.push_back(read());
+            if (has_error()) {  // Defensive
+                return get_error();
+            }
+        }
+        return BoltError::SUCCESS;
+    }
+
+    Value PackStreamReader::read_struct_value(uint8_t marker) {
+        uint32_t size = 0;
+        uint8_t tag = 0;
+
+        if ((marker & 0xF0) == MARKER_TINY_STRUCT_BASE) {  // Tiny Struct 0xB0 - 0xBF
+            size = marker & 0x0F;
+            tag = consume_byte();  // Can throw (EOF, stream error)
+        } else {
+            // consume_network_int and consume_byte can throw
+            switch (marker) {
+                case MARKER_STRUCT_8:
+                    size = consume_network_int<uint8_t>();
+                    tag = consume_byte();
+                    break;
+                case MARKER_STRUCT_16:
+                    size = consume_network_int<uint16_t>();
+                    tag = consume_byte();
+                    break;
+                default:
+                    throw_deserialization_error("Invalid marker passed to read_struct_value: 0x" + std::to_string(marker), BoltError::INVALID_ARGUMENT);
+            }
+        }
+
+        std::unique_ptr<PackStreamStructure> struct_ptr;
+        try {
+            struct_ptr = std::make_unique<PackStreamStructure>();  // Can throw std::bad_alloc
+        } catch (const std::bad_alloc&) {
+            set_error(BoltError::DESERIALIZATION_ERROR);
+            throw;
+        }
+
+        // read_struct_fields_into can throw (bad_alloc from reserve, or from element read())
+        // These exceptions will be caught by the try-catch in the public PackStreamReader::read(Value&) method.
+        BoltError err_code = read_struct_fields_into(*struct_ptr, tag, size);
+        if (err_code != BoltError::SUCCESS) {
+            throw_deserialization_error("Failed to read struct fields after header. Error: " + std::to_string(static_cast<int>(err_code)), err_code);
+        }
+        return struct_ptr;
+    }
+
+}  // namespace boltprotocol#include "boltprotocol/packstream_writer.h"
+
+#include <cstring>    // For memcpy
+#include <iostream>   // For std::ostream (if using stream ctors)
+#include <stdexcept>  // For std::runtime_error, std::logic_error
+#include <variant>    // For std::visit
+// packstream_constants.h is included via packstream_writer.h
+// message_defs.h is included via packstream_writer.h
+
+namespace boltprotocol {
+
+    // --- PackStreamWriter Constructor and Low-Level IO ---
+
+    PackStreamWriter::PackStreamWriter(std::vector<uint8_t>& buffer) : buffer_ptr_(&buffer), stream_ptr_(nullptr) {
+    }
+    PackStreamWriter::PackStreamWriter(std::ostream& stream) : buffer_ptr_(nullptr), stream_ptr_(&stream) {
+    }
+
+    void PackStreamWriter::append_byte(uint8_t byte) {
+        if (buffer_ptr_) {
+            buffer_ptr_->push_back(byte);
+        } else if (stream_ptr_) {
+            stream_ptr_->put(static_cast<char>(byte));
+            if (stream_ptr_->fail()) {
+                throw std::runtime_error("PackStreamWriter: Stream write failed (append_byte).");
+            }
+        } else {
+            throw std::logic_error("PackStreamWriter: No output target initialized (append_byte).");
+        }
+    }
+
+    void PackStreamWriter::append_bytes(const void* data, size_t size) {
+        if (size == 0) return;
+        if (buffer_ptr_) {
+            const auto* byte_data = static_cast<const uint8_t*>(data);
+            buffer_ptr_->insert(buffer_ptr_->end(), byte_data, byte_data + size);
+        } else if (stream_ptr_) {
+            stream_ptr_->write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
+            if (stream_ptr_->fail()) {
+                throw std::runtime_error("PackStreamWriter: Stream write failed (append_bytes).");
+            }
+        } else {
+            throw std::logic_error("PackStreamWriter: No output target initialized (append_bytes).");
+        }
+    }
+
+    // REMOVED: Definition and explicit instantiations of append_network_int
+    // The definition is now fully in packstream_writer.h
+
+    // --- PackStreamWriter Main Dispatch Logic ---
+
+    BoltError PackStreamWriter::write(const Value& value) {
+        try {
+            BoltError err = BoltError::SUCCESS;
+            std::visit(
+                [&](const auto& arg) {
+                    using T = std::decay_t<decltype(arg)>;
+                    if constexpr (std::is_same_v<T, std::nullptr_t>) {
+                        err = write_null_internal();
+                    } else if constexpr (std::is_same_v<T, bool>) {
+                        err = write_boolean_internal(arg);
+                    } else if constexpr (std::is_same_v<T, int64_t>) {
+                        err = write_integer_internal(arg);
+                    } else if constexpr (std::is_same_v<T, double>) {
+                        err = write_float_internal(arg);
+                    } else if constexpr (std::is_same_v<T, std::string>) {
+                        err = serialize_string_internal(arg);
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<BoltList>>) {
+                        if (!arg) {
+                            err = write_null_internal();
+                            return;
+                        }
+                        err = serialize_list_internal(*arg);
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<BoltMap>>) {
+                        if (!arg) {
+                            err = write_null_internal();
+                            return;
+                        }
+                        err = serialize_map_internal(*arg);
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<PackStreamStructure>>) {
+                        if (!arg) {
+                            err = write_null_internal();
+                            return;
+                        }
+                        err = serialize_structure_internal(*arg);
+                    } else {
+                        err = BoltError::SERIALIZATION_ERROR;
+                    }
+                },
+                value);
+            return err;
+        } catch (const std::runtime_error& /* e */) {
+            return BoltError::NETWORK_ERROR;
+        } catch (const std::logic_error& /* e */) {
+            return BoltError::SERIALIZATION_ERROR;
+        } catch (const std::bad_alloc& /* e */) {
+            return BoltError::SERIALIZATION_ERROR;
+        }
+    }
+
+}  // namespace boltprotocol#include <cstring>  // For memcpy (for float)
+#include <limits>   // For std::numeric_limits
+
+#include "boltprotocol/packstream_writer.h"  // Includes message_defs.h, packstream_constants.h
+// Low-level append functions are private members of PackStreamWriter, called via 'this->'
+
+namespace boltprotocol {
+
+    // --- PackStreamWriter Type-Specific Internal Implementations ---
+
+    BoltError PackStreamWriter::write_null_internal() {
+        // append_byte can throw if stream fails
+        append_byte(MARKER_NULL);
+        return BoltError::SUCCESS;
+    }
+
+    BoltError PackStreamWriter::write_boolean_internal(bool value) {
+        // append_byte can throw
+        append_byte(value ? MARKER_TRUE : MARKER_FALSE);
+        return BoltError::SUCCESS;
+    }
+
+    BoltError PackStreamWriter::write_integer_internal(int64_t value) {
+        // append_byte and append_network_int can throw
+        if (value >= -16 && value <= 127) {  // Tiny Int
+            append_byte(static_cast<uint8_t>(value));
+        } else if (value >= std::numeric_limits<int8_t>::min() && value <= std::numeric_limits<int8_t>::max()) {
+            append_byte(MARKER_INT_8);
+            append_network_int(static_cast<int8_t>(value));
+        } else if (value >= std::numeric_limits<int16_t>::min() && value <= std::numeric_limits<int16_t>::max()) {
+            append_byte(MARKER_INT_16);
+            append_network_int(static_cast<int16_t>(value));
+        } else if (value >= std::numeric_limits<int32_t>::min() && value <= std::numeric_limits<int32_t>::max()) {
+            append_byte(MARKER_INT_32);
+            append_network_int(static_cast<int32_t>(value));
+        } else {
+            append_byte(MARKER_INT_64);
+            append_network_int(value);
+        }
+        return BoltError::SUCCESS;
+    }
+
+    BoltError PackStreamWriter::write_float_internal(double value) {
+        // append_byte and append_network_int can throw
+        append_byte(MARKER_FLOAT64);
+        uint64_t temp_int;
+        static_assert(sizeof(double) == sizeof(uint64_t), "Double is not 64-bit.");
+        std::memcpy(&temp_int, &value, sizeof(double));
+        append_network_int(temp_int);
+        return BoltError::SUCCESS;
+    }
+
+    BoltError PackStreamWriter::write_string_header_internal(uint32_t size) {
+        // append_byte and append_network_int can throw
+        if (size <= 0x0F) {
+            append_byte(MARKER_TINY_STRING_BASE | static_cast<uint8_t>(size));
+        } else if (size <= std::numeric_limits<uint8_t>::max()) {
+            append_byte(MARKER_STRING_8);
+            append_network_int(static_cast<uint8_t>(size));
+        } else if (size <= std::numeric_limits<uint16_t>::max()) {
+            append_byte(MARKER_STRING_16);
+            append_network_int(static_cast<uint16_t>(size));
+        } else {
+            append_byte(MARKER_STRING_32);
+            append_network_int(size);
+        }
+        return BoltError::SUCCESS;
+    }
+
+    BoltError PackStreamWriter::write_string_data_internal(const std::string& value_str) {
+        // append_bytes can throw
+        append_bytes(value_str.data(), value_str.length());
+        return BoltError::SUCCESS;
+    }
+
+    BoltError PackStreamWriter::serialize_string_internal(const std::string& value) {
+        if (value.length() > std::numeric_limits<uint32_t>::max()) {
+            // This is a logical PackStream limitation, not an IO error.
+            return BoltError::SERIALIZATION_ERROR;
+        }
+        uint32_t len = static_cast<uint32_t>(value.length());
+        // write_string_header_internal can throw if its appends fail
+        BoltError err = write_string_header_internal(len);
+        if (err != BoltError::SUCCESS) return err;  // Should not happen if it throws
+        // write_string_data_internal can throw
+        return write_string_data_internal(value);
+    }
+
+    BoltError PackStreamWriter::write_list_header_internal(uint32_t size) {
+        // append_byte and append_network_int can throw
+        if (size <= 0x0F) {
+            append_byte(MARKER_TINY_LIST_BASE | static_cast<uint8_t>(size));
+        } else if (size <= std::numeric_limits<uint8_t>::max()) {
+            append_byte(MARKER_LIST_8);
+            append_network_int(static_cast<uint8_t>(size));
+        } else if (size <= std::numeric_limits<uint16_t>::max()) {
+            append_byte(MARKER_LIST_16);
+            append_network_int(static_cast<uint16_t>(size));
+        } else {
+            append_byte(MARKER_LIST_32);
+            append_network_int(size);
+        }
+        return BoltError::SUCCESS;
+    }
+
+    BoltError PackStreamWriter::serialize_list_internal(const BoltList& list_data_wrapper) {
+        const auto& list_elements = list_data_wrapper.elements;
+        if (list_elements.size() > std::numeric_limits<uint32_t>::max()) {
+            return BoltError::SERIALIZATION_ERROR;
+        }
+        // write_list_header_internal can throw
+        BoltError err = write_list_header_internal(static_cast<uint32_t>(list_elements.size()));
+        if (err != BoltError::SUCCESS) return err;
+
+        for (const auto& item : list_elements) {
+            // Recursive call to main write, which can throw or return BoltError
+            err = write(item);
+            if (err != BoltError::SUCCESS) return err;
+        }
+        return BoltError::SUCCESS;
+    }
+
+    BoltError PackStreamWriter::write_map_header_internal(uint32_t size) {
+        // append_byte and append_network_int can throw
+        if (size <= 0x0F) {
+            append_byte(MARKER_TINY_MAP_BASE | static_cast<uint8_t>(size));
+        } else if (size <= std::numeric_limits<uint8_t>::max()) {
+            append_byte(MARKER_MAP_8);
+            append_network_int(static_cast<uint8_t>(size));
+        } else if (size <= std::numeric_limits<uint16_t>::max()) {
+            append_byte(MARKER_MAP_16);
+            append_network_int(static_cast<uint16_t>(size));
+        } else {
+            append_byte(MARKER_MAP_32);
+            append_network_int(size);
+        }
+        return BoltError::SUCCESS;
+    }
+
+    BoltError PackStreamWriter::serialize_map_internal(const BoltMap& map_data_wrapper) {
+        const auto& map_pairs = map_data_wrapper.pairs;
+        if (map_pairs.size() > std::numeric_limits<uint32_t>::max()) {
+            return BoltError::SERIALIZATION_ERROR;
+        }
+        // write_map_header_internal can throw
+        BoltError err = write_map_header_internal(static_cast<uint32_t>(map_pairs.size()));
+        if (err != BoltError::SUCCESS) return err;
+
+        for (const auto& pair : map_pairs) {
+            // serialize_string_internal can throw or return BoltError
+            err = serialize_string_internal(pair.first);
+            if (err != BoltError::SUCCESS) return err;
+            // Recursive call to main write for value
+            err = write(pair.second);
+            if (err != BoltError::SUCCESS) return err;
+        }
+        return BoltError::SUCCESS;
+    }
+
+    BoltError PackStreamWriter::write_struct_header_internal(uint8_t tag, uint32_t size) {
+        // append_byte and append_network_int can throw
+        if (size <= 0x0F) {
+            append_byte(MARKER_TINY_STRUCT_BASE | static_cast<uint8_t>(size));
+            append_byte(tag);
+        } else if (size <= std::numeric_limits<uint8_t>::max()) {
+            append_byte(MARKER_STRUCT_8);
+            append_network_int(static_cast<uint8_t>(size));
+            append_byte(tag);
+        } else if (size <= std::numeric_limits<uint16_t>::max()) {  // Max 65535 fields for STRUCT_16
+            append_byte(MARKER_STRUCT_16);
+            append_network_int(static_cast<uint16_t>(size));
+            append_byte(tag);
+        } else {
+            // PackStream v1 (Bolt) does not define STRUCT_32. Max fields for a struct is 65535.
+            return BoltError::SERIALIZATION_ERROR;
+        }
+        return BoltError::SUCCESS;
+    }
+
+    BoltError PackStreamWriter::serialize_structure_internal(const PackStreamStructure& struct_data) {
+        // Max fields for a PackStream structure that Bolt messages use is typically limited by STRUCT_16
+        if (struct_data.fields.size() > 0xFFFF) {
+            return BoltError::SERIALIZATION_ERROR;
+        }
+        // write_struct_header_internal can throw
+        BoltError err = write_struct_header_internal(struct_data.tag, static_cast<uint32_t>(struct_data.fields.size()));
+        if (err != BoltError::SUCCESS) return err;
+
+        for (const auto& field : struct_data.fields) {
+            // Recursive call to main write
+            err = write(field);
+            if (err != BoltError::SUCCESS) return err;
+        }
+        return BoltError::SUCCESS;
+    }
+
+}  // namespace boltprotocol

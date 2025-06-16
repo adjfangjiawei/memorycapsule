@@ -1,0 +1,14 @@
+Starting Clang-Tidy analysis...
+--- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Protocol/BoltProtocol/Source/handshake.cpp ---
+/media/root/newvolumn/fjw/memorycapsule/Base/Protocol/BoltProtocol/Source/handshake.cpp:73:31: error: no member named 'HANDSHAKE_NO_COMMON_VERSION' in 'boltprotocol::BoltError' [clang-diagnostic-error]
+----------------------------------------
+--- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/CppOrm/Source/builder_parts/query_builder_helpers.cpp ---
+/media/root/newvolumn/fjw/memorycapsule/Base/CppOrm/Source/builder_parts/query_builder_helpers.cpp:182:5: warning: Value stored to 'any_user_condition_written' is never read [clang-analyzer-deadcode.DeadStores]
+/media/root/newvolumn/fjw/memorycapsule/Base/CppOrm/Source/builder_parts/query_builder_helpers.cpp:182:5: note: Value stored to 'any_user_condition_written' is never read
+/media/root/newvolumn/fjw/memorycapsule/Base/CppOrm/Source/builder_parts/query_builder_helpers.cpp:209:7: warning: Value stored to 'main_clause_keyword_written_this_call' is never read [clang-analyzer-deadcode.DeadStores]
+/media/root/newvolumn/fjw/memorycapsule/Base/CppOrm/Source/builder_parts/query_builder_helpers.cpp:209:7: note: Value stored to 'main_clause_keyword_written_this_call' is never read
+----------------------------------------
+--- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/CppOrm/Source/builder_parts/query_builder_utils.cpp ---
+/media/root/newvolumn/fjw/memorycapsule/Base/CppOrm/Source/builder_parts/query_builder_utils.cpp:263:5: warning: Value stored to 'any_user_condition_written' is never read [clang-analyzer-deadcode.DeadStores]
+/media/root/newvolumn/fjw/memorycapsule/Base/CppOrm/Source/builder_parts/query_builder_utils.cpp:263:5: note: Value stored to 'any_user_condition_written' is never read
+----------------------------------------
