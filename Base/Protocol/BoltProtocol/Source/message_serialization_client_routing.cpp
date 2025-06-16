@@ -1,12 +1,12 @@
-#include <exception>  // For std::bad_alloc, std::exception
+#include <exception>
 #include <map>
-#include <memory>    // For std::make_shared, std::shared_ptr
-#include <optional>  // For std::optional in RouteMessageParams
+#include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "boltprotocol/message_defs.h"
-#include "boltprotocol/message_serialization.h"  // For function declarations
+#include "boltprotocol/message_defs.h"  // Includes bolt_errors_versions.h for versions::Version
+#include "boltprotocol/message_serialization.h"
 #include "boltprotocol/packstream_writer.h"
 
 namespace boltprotocol {
@@ -14,95 +14,84 @@ namespace boltprotocol {
     BoltError serialize_route_message(const RouteMessageParams& params, PackStreamWriter& writer, const versions::Version& negotiated_bolt_version) {
         if (writer.has_error()) return writer.get_error();
 
-        PackStreamStructure route_struct_obj;  // Create on stack
+        // ROUTE message was introduced in Bolt 4.3
+        if (negotiated_bolt_version < versions::Version(4, 3)) {
+            writer.set_error(BoltError::SERIALIZATION_ERROR);  // Or UNSUPPORTED_PROTOCOL_VERSION for this message
+            // std::cerr << "Error: ROUTE message is not supported in Bolt version "
+            //           << (int)negotiated_bolt_version.major << "." << (int)negotiated_bolt_version.minor << std::endl;
+            return writer.get_error();
+        }
+
+        PackStreamStructure route_struct_obj;
         route_struct_obj.tag = static_cast<uint8_t>(MessageTag::ROUTE);
 
-        std::shared_ptr<BoltMap> context_map_sptr;
+        std::shared_ptr<BoltMap> routing_table_context_map_sptr;
         std::shared_ptr<BoltList> bookmarks_list_sptr;
 
         try {
-            // Field 1: Routing Context (Map)
-            context_map_sptr = std::make_shared<BoltMap>();
-            // The client application is responsible for populating this map correctly.
-            // For ROUTE V2 (Bolt 5.1+ usually), "db" and "imp_user" might be included here.
-            context_map_sptr->pairs = params.routing_context;
-            route_struct_obj.fields.emplace_back(Value(context_map_sptr));
+            // Field 1: routing::Dictionary (the routing context from client, e.g. initial address)
+            routing_table_context_map_sptr = std::make_shared<BoltMap>();
+            routing_table_context_map_sptr->pairs = params.routing_table_context;
+            route_struct_obj.fields.emplace_back(Value(routing_table_context_map_sptr));
 
-            // Field 2: Bookmarks (List of Strings)
+            // Field 2: bookmarks::List<String>
             bookmarks_list_sptr = std::make_shared<BoltList>();
             for (const auto& bookmark_str : params.bookmarks) {
                 bookmarks_list_sptr->elements.emplace_back(Value(bookmark_str));
             }
             route_struct_obj.fields.emplace_back(Value(bookmarks_list_sptr));
 
-            // Add additional top-level fields based on the negotiated Bolt version.
-            // This structure aligns with how ROUTE messages evolved:
-            // - Bolt < 4.3: 2 fields (context, bookmarks)
-            // - Bolt 4.3, 4.4: 3 fields (context, bookmarks, db_name_or_null)
-            // - Bolt >= 5.0: 4 fields (context, bookmarks, db_name_or_null, imp_user_or_null)
-            // The server might prioritize values from routing_context if they conflict with these top-level fields,
-            // especially for ROUTE V2 aware servers.
-
-            if (negotiated_bolt_version.major == 4 && negotiated_bolt_version.minor >= 3) {
-                // Bolt 4.3 or 4.4: Add db_name as 3rd field
-                if (params.db_name.has_value()) {
-                    route_struct_obj.fields.emplace_back(Value(params.db_name.value()));
+            // Field 3: Varies by version
+            if (negotiated_bolt_version.major == 4 && negotiated_bolt_version.minor == 3) {  // Bolt 4.3
+                // Third field is db::String (or null)
+                if (params.db_name_for_v43.has_value()) {
+                    route_struct_obj.fields.emplace_back(Value(params.db_name_for_v43.value()));
                 } else {
                     route_struct_obj.fields.emplace_back(nullptr);  // Explicit PackStream NULL
                 }
-            } else if (negotiated_bolt_version.major >= 5) {
-                // Bolt 5.0+: Add db_name as 3rd field and imp_user as 4th field
+                // imp_user not applicable as a top-level field for 4.3 ROUTE PSS.
+                if (params.extra_for_v44_plus.has_value()) {
+                    // Warning: extra_for_v44_plus provided but serializing for 4.3
+                }
+            } else if (negotiated_bolt_version.major > 4 || (negotiated_bolt_version.major == 4 && negotiated_bolt_version.minor >= 4)) {  // Bolt 4.4+
+                // Third field is extra::Dictionary(db::String, imp_user::String)
+                std::shared_ptr<BoltMap> extra_map_sptr = std::make_shared<BoltMap>();
+                if (params.extra_for_v44_plus.has_value()) {
+                    extra_map_sptr->pairs = params.extra_for_v44_plus.value();
+                }
+                // Ensure extra map is always sent, even if empty, as per spec for 4.4+ (field is extra::Dictionary)
+                route_struct_obj.fields.emplace_back(Value(extra_map_sptr));
 
-                // Field 3: Database Name (string or null)
-                if (params.db_name.has_value()) {
-                    route_struct_obj.fields.emplace_back(Value(params.db_name.value()));
-                } else {
-                    route_struct_obj.fields.emplace_back(nullptr);
-                }
-
-                // Field 4: Impersonated User (string or null)
-                if (params.impersonated_user.has_value()) {
-                    route_struct_obj.fields.emplace_back(Value(params.impersonated_user.value()));
-                } else {
-                    route_struct_obj.fields.emplace_back(nullptr);
-                }
-            } else {
-                // Bolt < 4.3: Only 2 fields.
-                // If db_name or impersonated_user were provided in params for these older versions,
-                // they are effectively ignored as they won't be serialized as top-level PSS fields.
-                // A stricter implementation might raise an error here if they are present.
-                if (params.db_name.has_value()) {
-                    // Log warning or handle as error if strict adherence is needed for older versions
-                    // For now, we simply don't serialize it.
-                }
-                if (params.impersonated_user.has_value()) {
-                    // Log warning or handle as error
+                if (params.db_name_for_v43.has_value()) {
+                    // Warning: db_name_for_v43 provided but serializing for 4.4+ (should be in extra_for_v44_plus)
                 }
             }
+            // Note: Bolt 5.0+ ROUTE PSS is also 3 fields like 4.4+, where the 3rd is an "extra" map.
+            // The content of routing_table_context and the extra map for 5.0+ might differ semantically (ROUTE V2)
+            // but the PSS structure for ROUTE message itself (tag 0x66) is 3 fields for 4.4+.
+            // The old 4-field logic was based on a misinterpretation or a different message structure.
+            // The spec for ROUTE message explicitly states 3 fields for 4.3 (context, bookmarks, db)
+            // and 3 fields for 4.4+ (context, bookmarks, extra_map).
 
         } catch (const std::bad_alloc&) {
             writer.set_error(BoltError::OUT_OF_MEMORY);
             return BoltError::OUT_OF_MEMORY;
-        } catch (const std::exception& e_std) {  // Catch other potential exceptions from map/list/value operations
+        } catch (const std::exception& e_std) {
             writer.set_error(BoltError::UNKNOWN_ERROR);
-            // std::cerr << "Std exception in serialize_route_message (fields prep): " << e_std.what() << std::endl;
             return BoltError::UNKNOWN_ERROR;
         }
 
-        // Convert the stack-based PSS object to a shared_ptr for the writer
         std::shared_ptr<PackStreamStructure> pss_sptr;
         try {
             pss_sptr = std::make_shared<PackStreamStructure>(std::move(route_struct_obj));
         } catch (const std::bad_alloc&) {
             writer.set_error(BoltError::OUT_OF_MEMORY);
             return BoltError::OUT_OF_MEMORY;
-        } catch (const std::exception& e_std) {  // Other exceptions from make_shared or PSS move ctor
+        } catch (const std::exception& e_std) {
             writer.set_error(BoltError::UNKNOWN_ERROR);
-            // std::cerr << "Std exception in serialize_route_message (pss make_shared): " << e_std.what() << std::endl;
             return BoltError::UNKNOWN_ERROR;
         }
-
-        if (!pss_sptr) {  // Should typically be caught by bad_alloc if make_shared fails
+        if (!pss_sptr) {
             writer.set_error(BoltError::OUT_OF_MEMORY);
             return BoltError::OUT_OF_MEMORY;
         }
@@ -110,8 +99,7 @@ namespace boltprotocol {
         return writer.write(Value(std::move(pss_sptr)));
     }
 
-    // Note: serialize_telemetry_message can be in its own message_serialization_client_telemetry.cpp
-    // or kept here if preferred for fewer files. For this submission, it's included here.
+    // serialize_telemetry_message implementation remains here
     BoltError serialize_telemetry_message(const TelemetryMessageParams& params, PackStreamWriter& writer) {
         if (writer.has_error()) return writer.get_error();
 
@@ -122,13 +110,11 @@ namespace boltprotocol {
         try {
             metadata_map_sptr = std::make_shared<BoltMap>();
             metadata_map_sptr->pairs = params.metadata;
-
             telemetry_struct_obj.fields.emplace_back(Value(metadata_map_sptr));
-
         } catch (const std::bad_alloc&) {
             writer.set_error(BoltError::OUT_OF_MEMORY);
             return BoltError::OUT_OF_MEMORY;
-        } catch (const std::exception& e_std) {
+        } catch (const std::exception&) {
             writer.set_error(BoltError::UNKNOWN_ERROR);
             return BoltError::UNKNOWN_ERROR;
         }
@@ -139,16 +125,14 @@ namespace boltprotocol {
         } catch (const std::bad_alloc&) {
             writer.set_error(BoltError::OUT_OF_MEMORY);
             return BoltError::OUT_OF_MEMORY;
-        } catch (const std::exception& e_std) {
+        } catch (const std::exception&) {
             writer.set_error(BoltError::UNKNOWN_ERROR);
             return BoltError::UNKNOWN_ERROR;
         }
-
         if (!pss_sptr) {
             writer.set_error(BoltError::OUT_OF_MEMORY);
             return BoltError::OUT_OF_MEMORY;
         }
-
         return writer.write(Value(std::move(pss_sptr)));
     }
 
