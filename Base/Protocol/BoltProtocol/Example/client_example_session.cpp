@@ -1,21 +1,39 @@
 #include "client_example_session.h"
 
-#include "boltprotocol/message_defs.h"  // For get_default_proposed_versions
+#include "boltprotocol/bolt_errors_versions.h"  // Provides boltprotocol::versions namespace
+#include "boltprotocol/message_defs.h"          // For DEFAULT_USER_AGENT_FORMAT_STRING etc.
 
-namespace {  // Anonymous namespace for implementation details or helpers local to this file
+// Anonymous namespace for implementation details or helpers local to this file
+namespace {
 
-    boltprotocol::BoltError prepare_hello_message_bytes(const boltprotocol::versions::Version& negotiated_version, std::vector<uint8_t>& out_bytes) {
-        using namespace boltprotocol;
-        out_bytes.clear();  // Ensure clean buffer
+    boltprotocol::BoltError prepare_hello_message_bytes(const boltprotocol::versions::Version& target_version, std::vector<uint8_t>& out_bytes) {
+        using namespace boltprotocol;  // Brings boltprotocol members into scope
+        // For versions constants, we still need to qualify or use another using directive
+        using versions::V5_1;  // Specific using-declaration for V5_1
+        using versions::V5_3;  // Specific using-declaration for V5_3
+
+        out_bytes.clear();
         PackStreamWriter ps_writer(out_bytes);
+
         HelloMessageParams hello_params;
         bool prep_ok = true;
         try {
-            std::string user_agent = DEFAULT_USER_AGENT_FORMAT_STRING + " (Bolt " + std::to_string(negotiated_version.major) + "." + std::to_string(negotiated_version.minor) + ")";
-            hello_params.extra_auth_tokens.emplace("user_agent", Value(user_agent));
-            hello_params.extra_auth_tokens.emplace("scheme", Value(std::string("basic")));
-            hello_params.extra_auth_tokens.emplace("principal", Value(std::string("neo4j")));
-            hello_params.extra_auth_tokens.emplace("credentials", Value(std::string("password")));
+            hello_params.user_agent = DEFAULT_USER_AGENT_FORMAT_STRING + " (Bolt " + std::to_string(target_version.major) + "." + std::to_string(target_version.minor) + ")";
+
+            // Compare with fully qualified or specifically "used" names
+            if (target_version < V5_1) {
+                hello_params.auth_scheme = "basic";
+                hello_params.auth_principal = "neo4j";
+                hello_params.auth_credentials = "password";
+            }
+
+            if (target_version == V5_3 || target_version < V5_3 == false) {  // Equivalent to target_version >= V5_3
+                HelloMessageParams::BoltAgentInfo agent_info;
+                agent_info.product = "MyExampleClientLib/0.1";
+                agent_info.platform = "Cpp/LinuxGeneric";
+                hello_params.bolt_agent = agent_info;
+            }
+
         } catch (const std::bad_alloc&) {
             print_bolt_error_details_client("alloc HELLO params", BoltError::OUT_OF_MEMORY);
             prep_ok = false;
@@ -24,9 +42,9 @@ namespace {  // Anonymous namespace for implementation details or helpers local 
             print_bolt_error_details_client("prep HELLO params", BoltError::UNKNOWN_ERROR);
             prep_ok = false;
         }
-        if (!prep_ok) return BoltError::UNKNOWN_ERROR;  // Or specific error
+        if (!prep_ok) return BoltError::UNKNOWN_ERROR;
 
-        BoltError err = serialize_hello_message(hello_params, ps_writer);
+        BoltError err = serialize_hello_message(hello_params, ps_writer, target_version);
         if (err != BoltError::SUCCESS) {
             print_bolt_error_details_client("serializing HELLO", err, nullptr, &ps_writer);
         }
@@ -49,13 +67,12 @@ boltprotocol::BoltError ClientSession::perform_handshake_sequence() {
         return last_error;
     }
 
-    // Simulate server choosing the first proposed version
     versions::Version server_chosen_version_sim = proposed_versions[0];
     std::array<uint8_t, HANDSHAKE_RESPONSE_SIZE_BYTES> server_response_b = server_chosen_version_sim.to_handshake_bytes();
     server_to_client_stream.write(reinterpret_cast<const char*>(server_response_b.data()), HANDSHAKE_RESPONSE_SIZE_BYTES);
-    server_to_client_stream.seekg(0);  // Rewind server stream for reading by perform_handshake
+    server_to_client_stream.seekg(0);
 
-    last_error = perform_handshake(client_to_server_stream, server_to_client_stream, proposed_versions, negotiated_version);
+    last_error = boltprotocol::perform_handshake(client_to_server_stream, server_to_client_stream, proposed_versions, negotiated_version);
     if (last_error != BoltError::SUCCESS) {
         print_bolt_error_details_client("performing handshake", last_error);
         return last_error;
@@ -75,7 +92,6 @@ boltprotocol::BoltError ClientSession::send_hello_sequence() {
     last_error = simulate_server_simple_success_response(server_to_client_stream, "HELLO");
     if (last_error != BoltError::SUCCESS) return last_error;
 
-    // client_to_server_stream will be cleared by send_and_receive_raw_message_client
     last_error = send_and_receive_raw_message_client(client_to_server_stream, server_to_client_stream, raw_message_bytes_storage, raw_response_bytes_storage, "HELLO");
     if (last_error != BoltError::SUCCESS) return last_error;
 
@@ -94,18 +110,25 @@ boltprotocol::BoltError ClientSession::send_hello_sequence() {
         }
     }
     std::cout << "Client: HELLO SUCCESS deserialized." << std::endl;
-    // Example: Access connection_id from metadata if server sent it
-    // auto it = hello_success_params.metadata.find("connection_id");
-    // if (it != hello_success_params.metadata.end() && std::holds_alternative<std::string>(it->second)) {
-    //    std::cout << "Client: Connection ID: " << std::get<std::string>(it->second) << std::endl;
-    // }
+    auto it_conn_id = hello_success_params.metadata.find("connection_id");
+    if (it_conn_id != hello_success_params.metadata.end()) {
+        if (const auto* str_val = std::get_if<std::string>(&(it_conn_id->second))) {
+            std::cout << "Client: Received connection_id: " << *str_val << std::endl;
+        }
+    }
+    auto it_server_agent = hello_success_params.metadata.find("server");
+    if (it_server_agent != hello_success_params.metadata.end()) {
+        if (const auto* str_val = std::get_if<std::string>(&(it_server_agent->second))) {
+            std::cout << "Client: Server agent: " << *str_val << std::endl;
+        }
+    }
     return BoltError::SUCCESS;
 }
 
 boltprotocol::BoltError ClientSession::send_goodbye_sequence() {
     using namespace boltprotocol;
     std::vector<uint8_t> raw_message_bytes_storage;
-    std::vector<uint8_t> raw_response_bytes_storage;  // Not used for GOODBYE response
+    std::vector<uint8_t> raw_response_bytes_storage;
 
     {
         PackStreamWriter ps_writer(raw_message_bytes_storage);
@@ -115,12 +138,8 @@ boltprotocol::BoltError ClientSession::send_goodbye_sequence() {
             return last_error;
         }
     }
-
-    // GOODBYE is one-way, no response expected from server typically.
-    // send_and_receive_raw_message_client handles expect_response = false
     last_error = send_and_receive_raw_message_client(client_to_server_stream, server_to_client_stream, raw_message_bytes_storage, raw_response_bytes_storage, "GOODBYE", false);
     if (last_error != BoltError::SUCCESS) {
-        // Error already printed by send_and_receive
         return last_error;
     }
     std::cout << "Client: GOODBYE sent." << std::endl;

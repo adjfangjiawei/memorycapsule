@@ -1,20 +1,21 @@
 #include "server_example_handlers.h"
 
-#include <exception>  // For std::bad_alloc, std::exception
-#include <variant>    // For std::get_if, std::holds_alternative
+#include <exception>
+#include <optional>  // For HelloMessageParams members
+#include <variant>
 
 namespace ServerHandlers {
 
-    // Simplified handle_hello_message. A real server would inspect hello_params.extra_auth_tokens for authentication.
-    boltprotocol::BoltError handle_hello_message(const boltprotocol::HelloMessageParams& hello_params, boltprotocol::PackStreamWriter& response_writer) {
+    // handle_hello_message now also takes the server_negotiated_version
+    // to potentially tailor its response or validation based on it.
+    boltprotocol::BoltError handle_hello_message(const boltprotocol::HelloMessageParams& parsed_hello_params, boltprotocol::PackStreamWriter& response_writer, const boltprotocol::versions::Version& server_negotiated_version) {
         using namespace boltprotocol;
-        std::cout << "  Server processing HELLO message." << std::endl;
-        // Example: Log received user agent
-        auto ua_it = hello_params.extra_auth_tokens.find("user_agent");
-        if (ua_it != hello_params.extra_auth_tokens.end()) {
-            if (const auto* ua_str = std::get_if<std::string>(&(ua_it->second))) {
-                std::cout << "    User-Agent: " << *ua_str << std::endl;
-            }
+        std::cout << "  Server processing HELLO message from: " << parsed_hello_params.user_agent << std::endl;
+        if (parsed_hello_params.bolt_agent.has_value()) {
+            std::cout << "    Bolt Agent Product: " << parsed_hello_params.bolt_agent.value().product << std::endl;
+        }
+        if (parsed_hello_params.auth_scheme.has_value()) {
+            std::cout << "    Auth Scheme: " << parsed_hello_params.auth_scheme.value() << std::endl;
         }
 
         SuccessMessageParams success_for_hello_params;
@@ -25,16 +26,32 @@ namespace ServerHandlers {
 
         try {
             success_for_hello_params.metadata.emplace("connection_id", Value(std::string("server-conn-xyz")));
-            success_for_hello_params.metadata.emplace("server", Value(std::string("MyExampleBoltServer/0.1")));
+            success_for_hello_params.metadata.emplace("server", Value(std::string("MyExampleBoltServer/0.1 (Bolt ") + std::to_string(server_negotiated_version.major) + "." + std::to_string(server_negotiated_version.minor) + ")"));
+
+            // Example: If client requested utc patch and server supports it for this version
+            if (server_negotiated_version.major == 4 && (server_negotiated_version.minor == 3 || server_negotiated_version.minor == 4)) {
+                if (parsed_hello_params.patch_bolt.has_value()) {
+                    for (const auto& patch : parsed_hello_params.patch_bolt.value()) {
+                        if (patch == "utc") {  // Server agrees to "utc" patch
+                            auto agreed_patches_list = std::make_shared<BoltList>();
+                            agreed_patches_list->elements.emplace_back(Value(std::string("utc")));
+                            success_for_hello_params.metadata.emplace("patch_bolt", Value(agreed_patches_list));
+                            std::cout << "    Server agreed to 'utc' patch." << std::endl;
+                            break;
+                        }
+                    }
+                }
+            }
 
             pss_obj_on_stack.tag = static_cast<uint8_t>(MessageTag::SUCCESS);
             meta_map_sptr = std::make_shared<BoltMap>();
             meta_map_sptr->pairs = std::move(success_for_hello_params.metadata);
             pss_obj_on_stack.fields.emplace_back(Value(meta_map_sptr));
             pss_to_write_sptr = std::make_shared<PackStreamStructure>(std::move(pss_obj_on_stack));
+
         } catch (const std::bad_alloc&) {
             print_bolt_error_details_server("server HELLO SUCCESS resp (bad_alloc)", BoltError::OUT_OF_MEMORY, nullptr, &response_writer);
-            response_writer.set_error(BoltError::OUT_OF_MEMORY);  // Ensure writer knows
+            response_writer.set_error(BoltError::OUT_OF_MEMORY);
             server_resp_ok = false;
             return BoltError::OUT_OF_MEMORY;
         } catch (const std::exception& e_std) {
@@ -44,20 +61,25 @@ namespace ServerHandlers {
             server_resp_ok = false;
             return BoltError::UNKNOWN_ERROR;
         }
+
         if (!server_resp_ok || !pss_to_write_sptr) {
-            if (server_resp_ok) print_bolt_error_details_server("server HELLO SUCCESS resp (null pss_to_write_sptr)", BoltError::OUT_OF_MEMORY, nullptr, &response_writer);
-            if (server_resp_ok) response_writer.set_error(BoltError::OUT_OF_MEMORY);  // if pss_to_write_sptr is null but no exception
-            return response_writer.get_error();                                       // Return the error state of the writer
+            if (server_resp_ok && !pss_to_write_sptr) {  // Only print if no exception but pss is null
+                print_bolt_error_details_server("server HELLO SUCCESS resp (null pss_to_write_sptr)", BoltError::OUT_OF_MEMORY, nullptr, &response_writer);
+                response_writer.set_error(BoltError::OUT_OF_MEMORY);
+            }
+            return response_writer.get_error();
         }
 
         BoltError err = response_writer.write(Value(std::move(pss_to_write_sptr)));
         if (err != BoltError::SUCCESS) {
             print_bolt_error_details_server("Server serializing SUCCESS for HELLO", err, nullptr, &response_writer);
-            // err is already set in response_writer by the write call.
         }
         return err;
     }
 
+    // handle_run_message and deserialize_run_params_from_struct remain the same
+    // as they were not directly affected by HelloMessageParams changes.
+    // ... (rest of handle_run_message and deserialize_run_params_from_struct) ...
     boltprotocol::BoltError handle_run_message(const boltprotocol::RunMessageParams& run_params, boltprotocol::PackStreamWriter& response_writer) {
         using namespace boltprotocol;
         std::cout << "  Server processing RUN query: '" << run_params.cypher_query << "'" << std::endl;
@@ -73,21 +95,19 @@ namespace ServerHandlers {
         }
 
         BoltError err = BoltError::SUCCESS;
-        PackStreamStructure pss_obj_on_stack;  // Reused for different PSS constructions
+        PackStreamStructure pss_obj_on_stack;
         std::shared_ptr<BoltMap> meta_map_sptr;
         std::shared_ptr<BoltList> list_sptr;
         std::shared_ptr<PackStreamStructure> pss_to_write_sptr;
 
-        // 1. Send SUCCESS for RUN (contains field names)
         try {
             SuccessMessageParams run_success_params;
             list_sptr = std::make_shared<BoltList>();
-            list_sptr->elements.emplace_back(Value(std::string("name")));  // Dummy field name
+            list_sptr->elements.emplace_back(Value(std::string("name")));
             run_success_params.metadata.emplace("fields", Value(list_sptr));
-            // Optionally add qid if server supports it: run_success_params.metadata.emplace("qid", Value(static_cast<int64_t>(123)));
 
             pss_obj_on_stack.tag = static_cast<uint8_t>(MessageTag::SUCCESS);
-            pss_obj_on_stack.fields.clear();  // Clear for reuse
+            pss_obj_on_stack.fields.clear();
 
             meta_map_sptr = std::make_shared<BoltMap>();
             meta_map_sptr->pairs = std::move(run_success_params.metadata);
@@ -106,7 +126,7 @@ namespace ServerHandlers {
             return BoltError::UNKNOWN_ERROR;
         }
 
-        if (!pss_to_write_sptr) {  // Should be caught by bad_alloc if make_shared fails typically
+        if (!pss_to_write_sptr) {
             print_bolt_error_details_server("preparing RUN SUCCESS (null pss_to_write_sptr)", BoltError::OUT_OF_MEMORY, nullptr, &response_writer);
             response_writer.set_error(BoltError::OUT_OF_MEMORY);
             return BoltError::OUT_OF_MEMORY;
@@ -118,15 +138,14 @@ namespace ServerHandlers {
         }
         std::cout << "  Server sent SUCCESS for RUN (with fields)." << std::endl;
 
-        // 2. Send RECORD messages (dummy data)
-        for (int i = 0; i < 2; ++i) {  // Send two dummy records
+        for (int i = 0; i < 2; ++i) {
             try {
                 RecordMessageParams record_params;
                 record_params.fields.emplace_back(Value(std::string("Node " + std::to_string(i))));
 
                 pss_obj_on_stack.tag = static_cast<uint8_t>(MessageTag::RECORD);
                 pss_obj_on_stack.fields.clear();
-                list_sptr = std::make_shared<BoltList>();  // New list for this record
+                list_sptr = std::make_shared<BoltList>();
                 list_sptr->elements = std::move(record_params.fields);
                 pss_obj_on_stack.fields.emplace_back(Value(list_sptr));
 
@@ -155,15 +174,13 @@ namespace ServerHandlers {
             }
             std::cout << "  Server sent RECORD " << i << "." << std::endl;
         }
-
-        // 3. Send final SUCCESS (summary)
         try {
             SuccessMessageParams summary_success_params;
-            summary_success_params.metadata.emplace("type", Value(std::string("r")));  // Query type 'r' for read
+            summary_success_params.metadata.emplace("type", Value(std::string("r")));
 
             pss_obj_on_stack.tag = static_cast<uint8_t>(MessageTag::SUCCESS);
             pss_obj_on_stack.fields.clear();
-            meta_map_sptr = std::make_shared<BoltMap>();  // New map for this summary
+            meta_map_sptr = std::make_shared<BoltMap>();
             meta_map_sptr->pairs = std::move(summary_success_params.metadata);
             pss_obj_on_stack.fields.emplace_back(Value(meta_map_sptr));
 
@@ -201,53 +218,46 @@ namespace ServerHandlers {
         out_params.extra_metadata.clear();
 
         if (run_struct.tag != static_cast<uint8_t>(MessageTag::RUN)) {
-            return BoltError::INVALID_MESSAGE_FORMAT;  // Should be checked by caller too
+            return BoltError::INVALID_MESSAGE_FORMAT;
         }
-
-        // RUN <query_string> <params_map> <extra_map>
         if (run_struct.fields.size() < 2 || run_struct.fields.size() > 3) {
             return BoltError::INVALID_MESSAGE_FORMAT;
         }
 
         bool conversion_ok = true;
         try {
-            // Field 0: Cypher query (string)
             if (std::holds_alternative<std::string>(run_struct.fields[0])) {
                 out_params.cypher_query = std::get<std::string>(run_struct.fields[0]);
             } else {
                 conversion_ok = false;
             }
 
-            // Field 1: Parameters map
             if (conversion_ok && std::holds_alternative<std::shared_ptr<BoltMap>>(run_struct.fields[1])) {
                 auto params_map_sptr = std::get<std::shared_ptr<BoltMap>>(run_struct.fields[1]);
                 if (params_map_sptr) {
-                    out_params.parameters = params_map_sptr->pairs;  // This is a copy
+                    out_params.parameters = params_map_sptr->pairs;
                 } else {
-                    conversion_ok = false;  // Null map pointer
+                    conversion_ok = false;
                 }
-            } else if (conversion_ok) {  // Field 1 not a map
+            } else if (conversion_ok) {
                 conversion_ok = false;
             }
-
-            // Field 2: Extra metadata map (optional)
             if (conversion_ok && run_struct.fields.size() == 3) {
                 if (std::holds_alternative<std::shared_ptr<BoltMap>>(run_struct.fields[2])) {
                     auto extra_map_sptr = std::get<std::shared_ptr<BoltMap>>(run_struct.fields[2]);
                     if (extra_map_sptr) {
-                        out_params.extra_metadata = extra_map_sptr->pairs;  // Copy
+                        out_params.extra_metadata = extra_map_sptr->pairs;
                     }
-                    // If it's a null map shared_ptr, extra_metadata remains empty, which is fine.
-                } else {  // Field 2 present but not a map
+                } else {
                     conversion_ok = false;
                 }
             }
         } catch (const std::bad_alloc&) {
             return BoltError::OUT_OF_MEMORY;
-        } catch (const std::bad_variant_access&) {  // Should be caught by holds_alternative
+        } catch (const std::bad_variant_access&) {
             return BoltError::INVALID_MESSAGE_FORMAT;
         } catch (const std::exception&) {
-            return BoltError::UNKNOWN_ERROR;  // Other potential exceptions from string/map copy
+            return BoltError::UNKNOWN_ERROR;
         }
 
         return conversion_ok ? BoltError::SUCCESS : BoltError::INVALID_MESSAGE_FORMAT;

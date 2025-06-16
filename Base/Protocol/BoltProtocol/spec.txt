@@ -1,0 +1,3257 @@
+Bolt Protocol handshake specification
+
+All Bolt connections begin with a handshake to negotiate which version of the messaging protocol to use. Following a successful negotiation, the agreed messaging protocol then takes ownership of the connection for the remainder of its lifetime. The handshake itself is not versioned.
+
+Bolt is a client-server protocol designed primarily for executing queries against a database server. Communication occurs through request-response exchanges, in much the same way as HTTP. Unlike HTTP, however, Bolt connections are stateful.
+
+Bolt Protocol message specification
+
+The message specification describes the message exchanges that take place on a connection following a successful Bolt handshake. For details of establishing a connection and performing a handshake, see Bolt Protocol handshake specification.
+
+The Bolt protocol communicates with specific versioned messages.
+Bolt Protocol server state specification
+
+For the server, each connection using the Bolt Protocol will occupy one of several states throughout its lifetime. This state is used to determine what actions may be undertaken by the client.
+
+For more information, see the corresponding version of the Bolt Protocol server state specification.
+Server signals
+
+Jump ahead means that the signal is immediately available before any messages are processed in the message queue.
+Server signal 	Jump ahead 	Description
+
+<INTERRUPT>
+
+
+X
+
+an interrupt signal
+
+<DISCONNECT>
+
+
+a disconnect signal
+Protocol errors
+
+If a server or client receives a message type that is unexpected, according to the transitions described in this document, it must treat that as a protocol error. Protocol errors are fatal and should immediately transition the server state to DEFUNCT, closing any open connections.
+Session
+
+Each connection to the server creates a new session that lives until that connection is closed. Each session is isolated and the server keeps track of the current state, based on the requests and responses exchanged within that session. A session ends when the socket for that connection is closed. Typically, this will be closed by the client.
+Message exchange
+
+Messages are exchanged in a request-response pattern between client and server. Each request consists of exactly one message and each response consists of zero or more detail messages followed by exactly one summary message. The presence or absence of detail messages in a response is directly related to the type of request message that has been sent. In other words, some request message types elicit a response that may contain detail messages, others do not.
+
+Messages may also be pipelined. In other words, clients may send multiple requests eagerly without first waiting for responses. When a failure occurs in this scenario, servers must ignore all subsequent requests until the client has explicitly acknowledged receipt of the failure. This prevents inadvertent execution of queries that may not be valid. More details of this process can be found in the sections below.
+Serialization
+
+Messages and their contents are serialized into network streams using PackStream Specification Version 1. Each message is represented as a PackStream structure that contains a fixed number of fields. The message type is denoted by the PackStream structure tag byte and each message is defined in the Bolt protocol. Serialization is specified with PackStream Version 1.
+Chunking
+
+A layer of chunking is also applied to message transmissions as a way to more predictably manage packets of data. The chunking process allows the message to be broken into one or more pieces, each of an arbitrary size, and for those pieces to be transmitted within separate chunks. Each chunk consists of a two-byte header, detailing the chunk size in bytes followed by the chunk data itself. Chunk headers are 16-bit unsigned integers, meaning that the maximum theoretical chunk size permitted is 65,535 bytes.
+
+Each encoded message must be terminated with a chunk of zero size, i.e.
+
+00 00
+
+This is used to signal message boundaries to a receiving parties, allowing blocks of data to be fully received without requiring that the message is parsed immediately. This also allows for unknown message types to be received and handled without breaking the messaging chain.
+
+The Bolt protocol encodes each message using a chunked transfer encoding.
+
+Each message is transferred as one or more chunks of data.
+
+Each chunk starts with a two-byte header, an unsigned big-endian 16-bit integer, representing the size of the chunk not including the header.
+
+A message can be divided across multiple chunks, allowing client and server alike to transfer large messages without having to determine the length of the entire message in advance.
+
+Chunking applies on each message individually.
+
+One chunk cannot contain more than one message.
+
+Each message ends with two bytes with the value 00 00, these are not counted towards the chunk size (you may consider them as individual chunks of size 0).
+
+With version 4.1+, the NOOP chunk (empty chunk) is used to send an empty chunk and the purpose is to be able to support a keep alive behaviour on the connection.
+
+
+Examples of how Bolt chunks messages
+Example of a message in one chunk
+
+Message data containing 16 bytes:
+
+00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F
+
+results in the following chunk:
+
+00 10 00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F 00 00
+
+with the chunk header 00 10 and the end marker 00 00.
+Example of a message split in two chunks
+
+Message data containing 20 bytes:
+
+00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F 01 02 03 04
+
+results in chunk 1 and chunk 2:
+
+00 10 00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F
+00 04 01 02 03 04 00 00
+
+with the chunk 1 header 00 01 and no end marker for chunk 1, still message data. Chunk 2 has a header 00 04 and an end marker 00 00.
+Example with two messages
+
+Message 1 data containing 16 bytes:
+
+00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F
+
+Message 2 data containing 8 bytes:
+
+0F 0E 0D 0C 0B 0A 09 08
+
+are both encoded with chunking:
+
+00 10 00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F 00 00
+00 08 0F 0E 0D 0C 0B 0A 09 08 00 00
+
+Example with two messages with a NOOP in between
+
+Message 1 data containing 16 bytes:
+
+00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F
+
+Message 2 data containing 8 bytes:
+
+0F 0E 0D 0C 0B 0A 09 08
+
+The two messages encoded with chunking and a NOOP(empty chunk) in between:
+
+00 10 00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F 00 00
+00 00
+00 08 0F 0E 0D 0C 0B 0A 09 08 00 00
+
+Pipelining
+
+The client may send multiple requests eagerly without first waiting for responses.
+Transaction
+
+A transaction is the concept of atomic units of work.
+
+The concept of Transaction is when the server is in the READY state and the transaction is opened with the request message RUN and the response of a summary message SUCCESS. The Transaction is successfully closed with the summary message SUCCESS for the request message PULL_ALL or the request message DISCARD_ALL.
+
+Version 3 of the Bolt Protocol introduces the concept of Auto-commit Transaction and Explicit Transaction. Auto-commit Transaction is the server in the READY state and the transition to the STREAMING state. The transaction is opened with the request message RUN and the response of a summary message SUCCESS.
+
+The Auto-commit Transaction is successfully closed with the summary message SUCCESS for the request message PULL_ALL or the request message DISCARD_ALL. Thus, the Auto-commit Transaction can only contain one RUN request message.
+
+In version 4 of the Bolt Protocol, the DISCARD_ALL and PULL_ALL messages are renamed to DISCARD and PULL and new fields are introduced.
+Example with Bolt v4
+
+...
+C: HELLO ...
+S: SUCCESS ...  // Server is in READY state
+
+C: RUN ...      // Open a new Auto-commit Transaction
+S: SUCCESS ...  // Server is in STREAMING state
+
+C: PULL ...
+S: RECORD ...
+...
+S: RECORD ...
+S: SUCCESS {"has_more": true, ...}  // Server is still in STREAMING state
+
+C: PULL
+S: RECORD ...
+...
+S: RECORD ...
+S: SUCCESS {"has_more": false, ...}  // Server is in READY state and this implies that the Auto-commit Transaction is closed.
+
+In version 1, HELLO is called INIT and Auto-commit Transaction is just Transaction. The field has_more=true/false is introduced in version 4. See also the corresponding version of the Bolt Protocol server state specification.
+
+The Explicit Transaction is introduced in version 3 of Bolt and is a more generic transaction that can contain several RUN request messages. The concept of Explicit Transaction is when the server is in the READY state and the transaction is opened with the request message BEGIN and the response of a summary message SUCCESS (thus transition into the TX_READY server state).
+
+The Explicit Transaction is successfully closed with the request message COMMIT and the response of a summary message SUCCESS. The result stream (detail messages) must be fully consumed or discarded by a client before the server can transition to the TX_READY state and thus be able to close the transaction with a COMMIT request message. It can be gracefully discarded and set to the initial server state of READY with the request message ROLLBACK.
+Example with Bolt v4
+
+...
+C: HELLO ...
+S: SUCCESS ...  // Server is in READY state
+
+C: BEGIN ...    // Open a new Explicit Transaction
+S: SUCCESS ...  // Server is in TX_READY state
+
+C: RUN ...
+S: SUCCESS {"qid": 123, ...} // Server is in TX_STREAMING state, one stream is open
+
+C: RUN ...
+S: SUCCESS {"qid": 456, ...} // Server is in TX_STREAMING state, two streams are open
+
+C: PULL {"qid": 123, ...}
+S: RECORD ...
+...
+S: RECORD ...
+S: SUCCESS {"has_more": true, ...}  // Server is still in TX_STREAMING state, two streams are still open
+
+C: PULL {"qid": 123, ...}
+S: RECORD ...
+...
+S: RECORD ...
+S: SUCCESS ... has_more=false  // Server is still in TX_STREAMING state, one stream is still open
+
+C: PULL {"qid": 456, ...}
+S: RECORD ...
+...
+S: RECORD ...
+S: SUCCESS {"has_more": false, ...}  // Server is in TX_READY state, all streams have been fully consumed
+
+C: COMMIT   // Close the Explicit Transaction
+S: SUCCESS  // Server is in READY state
+
+In version 3, PULL is called PULL_ALL. Additionally, there are no fields, e.g qid=123 and has_more=true/false available in version 3 of the Bolt Protocol.
+
+More examples of message exchanges can be found in Appendix — Message exchange examples.
+Messages
+
+There are three different kinds of messages:
+
+Request message - the client sends a message.
+
+Summary message - the server always responds with one summary message if the connection is still open.
+
+Detail message - the server always responds with zero or more detail messages before sending a summary message.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Message 	Signature 	Type of message 	Fields 	Description
+
+HELLO
+
+01
+
+Request
+
+extra::Dictionary(user_agent::String, routing::Dictionary(address::String), notifications_minimum_severity::String, notifications_disabled_categories::List<String>, bolt_agent::Dictionary(product::String, platform::String, language::String, language_details::String))
+
+initialize connection (replaces INIT of v1 & v2)(routing::Dictionary(address::String) added in v4.1) (notifications_minimum_severity::String, notifications_disabled_categories::List<String> added in v5.2)(bolt_agent::Dictionary added in v5.3)
+
+LOGON
+
+6A
+
+Request
+
+scheme::String, …​
+
+authenticates the user you send with the message
+
+LOGOFF
+
+6B
+
+Request
+
+logs off current user, becomes ready for another LOGON message
+
+TELEMETRY
+
+54
+
+Request
+
+api::Integer
+
+transmit usage telemetry (added in v5.4)
+
+GOODBYE
+
+02
+
+Request
+
+close the connection, triggers a <DISCONNECT> signal
+
+ACK_FAILURE (only v1 and v2)
+
+0E
+
+Request
+
+acknowledge a failure response (deprecated, use RESET instead with v3+)
+
+RESET
+
+0F
+
+Request
+
+reset the connection, triggers an <INTERRUPT> signal
+
+RUN
+
+10
+
+Request
+
+query::String, parameters::Dictionary, extra::Dictionary(bookmarks::List<String>, tx_timeout::Integer, tx_metadata::Dictionary, mode::String, db:String, notifications_minimum_severity::String, notifications_disabled_categories::List<String>)
+
+execute a query (extra::Dictionary added in v3)(db:String added in v4.0) (notifications_minimum_severity::String, notifications_disabled_categories::List<String> added in v5.2)
+
+DISCARD
+
+2F
+
+Request
+
+extra::Dictionary(n::Integer, qid::Integer)
+
+discard records (replaces DISCARD_ALL of v1, v2 & v3)(fields added in v4.0)
+
+PULL
+
+3F
+
+Request
+
+extra::Dictionary(n::Integer, qid::Integer)
+
+fetch records (replaces PULL_ALL of v1, v2 & v3)(fields added in v4.0)
+
+BEGIN
+
+11
+
+Request
+
+extra::Dictionary(bookmarks::List<String>, tx_timeout::Integer, tx_metadata::Dictionary, mode::String, db::String, imp_user::String, notifications_minimum_severity::String, notifications_disabled_categories::List<String>)
+
+begin a new transaction (added in v3)(db::String, imp_user::String added in v4.0) (notifications_minimum_severity::String, notifications_disabled_categories::List<String> added in v5.2)
+
+COMMIT
+
+12
+
+Request
+
+commit a transaction (added in v3)
+
+ROLLBACK
+
+13
+
+Request
+
+rollback a transaction (added in v3)
+
+ROUTE
+
+66
+
+Request
+
+routing::Dictionary(address::String), bookmarks::List<String>, extra::Dictionary(db::String, imp_user::String)
+
+fetch the current routing table (added in v4.3)
+
+SUCCESS
+
+70
+
+Summary
+
+metadata::Dictionary
+
+request succeeded
+
+IGNORED
+
+7E
+
+Summary
+
+request was ignored
+
+FAILURE
+
+7F
+
+Summary
+
+metadata::Dictionary
+
+request failed
+
+RECORD
+
+71
+
+Detail
+
+data::List
+
+data values
+Request message HELLO
+
+Introduced in bolt 3
+
+The HELLO message request the connection to be authorized for use with the remote database and replaces the INIT request message of version 1 and 2. See below for more information on INIT.
+
+The server must be in the CONNECTED state to be able to process a HELLO message. For any other states, receipt of an HELLO request must be considered a protocol violation and lead to connection closure.
+
+Clients should send HELLO message to the server immediately after connection and process the corresponding response before using that connection in any other way.
+
+Clients wishing to retry initialization should establish a new connection.
+
+In version 4.1, routing::Dictionary(address::String) was added to indicate an indicator if the server should carry out routing, according to the given routing context.
+
+In version 5.2, notifications_minimum_severity::String and notifications_disabled_categories::List<String> were added to be able to control the notification config. Disabling categories or severities allows the server to skip analysis for those, which can speed up query execution.
+
+In version 5.3, bolt_agent::Dictionary was added to indicate the underlying driver and its version as opposed to the application using the driver in `user_agent.
+
+On versions earlier than 5.1, the authentication token described on the LOGON message should be sent as part of the HELLO message instead.
+routing values 	Description
+
+{"routing": null} or {}
+
+the server should not carry out routing
+
+{"routing": {}}
+
+the server should carry out routing
+
+{"routing": {"address": "x.example.com:9001", "region": "example", …​}}
+
+the server should carry out routing according to the given routing context
+
+Signature: 01
+Fields:
+
+extra::Dictionary(
+scheme::String,
+...
+user_agent::String,
+patch_bolt::List<String>,
+routing::Dictionary(address::String),
+notifications_minimum_severity::String,
+notifications_disabled_categories::List<String>,
+bolt_agent::Dictionary(
+product::String,
+platform::String,
+language::String,
+language_details::String
+)
+)
+
+scheme is the authentication scheme, alongside any additional entries (...) specific to the chosen scheme. Predefined schemes are: "none", "basic", "bearer", "kerberos" (depending on the server’s capabilities). See LOGON message for more information. Removed after bolt 5.0
+
+The user_agent should conform to "Name/Version" for example "Example/4.1.0" (see https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/User-Agent for more information). Drivers should allow application code to set this value as it is meant to identify the application using the driver.
+
+patch_bolt lets the driver request a patch to the protocol from the server. The patch must not be applied until the server acknowledges it in the SUCCESS response. Default: []. Introduced in bolt 4.3 Removed after bolt 4.4
+
+    "utc" is currently the only supported patch. If successfully negotiated, server and driver will use DateTime and DateTimeZoneId as defined in Bolt version 5.0.
+
+The routing field should contain routing context information and the address field that should contain the address that the client initially tries to connect with e.g. "x.example.com:9001". Key-value entries in the routing context should correspond exactly to those in the original URI query string. Setting routing to null indicates that the server should not carry out any routing. Default: null. Introduced in bolt 4.1
+
+The notifications_minimum_severity specifies the minimum severity a notification needs to have to be returned. Please see Status Codes → Server notification grouping and filtering for acceptable entries, with the special value "OFF" added to the protocol, which disables all notifications. Sending null will make the server use its configured default. Default: null. Introduced in bolt 5.2
+
+The notifications_disabled_categories is a list of notification categories that will not be returned. Please see Status Codes → Server notification grouping and filtering for available categories. Sending null will make the server use its configured default. Default: null. Introduced in bolt 5.2
+
+bolt_agent::Dictionary, as opposed to user_agent, is meant to identify the driver rather than the application using it. Drivers should not allow applications to change this value. When populating the fields, drivers should be careful not to include anything that could be used to identify a single machine or user. This field is mandatory. Introduced in bolt 5.3
+
+    product::String should conform to "Name/Version" and identify the driver for example "neo4j-fortran-alice-doe/42.69.0". This field is mandatory.
+
+    platform::String should describe the platform the driver is running on for example "Linux 5.15.0-58-generic; x86_64". Send null (or omit) if no platform information is available. Default: null.
+
+    language::String should conform to "Name/Version" and describe the language the driver/application is written in for example "Fortran/77". Send null (or omit) if no language information is available. Default: null.
+
+    language_details::String can contain further information about the language the driver/application is written in for example compiler, runtime, or interpreter and respective versions. Send null (or omit) if no language details are available. Default: null.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Detail messages:
+
+No detail messages should be returned.
+
+Valid summary messages:
+
+SUCCESS
+
+FAILURE
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Examples
+Synopsis
+
+HELLO {extra}
+
+Example 1
+
+HELLO {"user_agent": "Example/4.1.0", "routing": {"address": "x.example.com:9001"}, "bolt_agent": {"product": "neo4j-fortran-alice-doe/42.69.0", "platform": "Linux 5.15.0-58-generic; x86_64", "language": "Fortran/77", "language_details": "gfortran 9.3.0"}}
+
+Example 2
+
+HELLO {"user_agent": "Example/4.2.0", "patch_bolt": ["utc"], "routing": {"address": "x.example.com:9001", "policy": "example_policy_routing_context", "region": "example_region_routing_context"}, "notifications_minimum_severity": "WARNING", "notifications_disabled_categories": ["HINT", "GENERIC"]}
+
+Server response SUCCESS
+
+A SUCCESS message response indicates that the client is permitted to exchange further messages. Servers can include metadata that describes details of the server environment and/or the connection.
+
+The following fields are defined for inclusion in the SUCCESS metadata:
+
+server::String (server agent string, example "Neo4j/4.1.0")
+
+connection_id::String (unique identifier of the bolt connection used on the server side, example: "bolt-61")
+
+patch_bolt::List<String> only if the client requested patches in the patch_bolt field of the request. The server will include the subset of requested patches (with the exact same string the client requests) if it supports it. From that point onward, the server-client communication must only use the patched protocol. Introduced in bolt 4.3 Removed after bolt 4.4
+
+hints::Dictionary (set of optional configuration hints to be considered by the driver) Introduced in bolt 4.3
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+The hints dictionary may contain a set of optional configuration hints which may be interpreted or ignored by drivers at their own discretion in order to augment operations where applicable. A full listing of the available hints may be found in Appendix — Connection hints. Hints remain valid throughout the lifetime of a given connection and cannot be changed. As such, newly established connections may observe different hints and/or hint values as the server configuration is adjusted.
+Example
+
+SUCCESS {"server": "Neo4j/4.0.0", "hints": {"connection.recv_timeout_seconds": 120}}
+
+Example 2
+
+SUCCESS {"server": "Neo4j/4.4.0", "patch_bolt": ["utc"], "hints": {"connection.recv_timeout_seconds": 120}}
+
+Server response FAILURE
+
+A FAILURE message response indicates that the client is not permitted to exchange further messages. Servers may choose to include metadata describing the nature of the failure but must immediately close the connection after the failure has been sent.
+Example v5.7+
+
+FAILURE {"gql_status": "01N00", "message": "old message you have failed something", "description": "default condition - default subcondition. Message", "neo4j_code": "Example.Failure.Code", "diagnostic_record": {"_classification": "CLIENT_ERROR"}}
+
+Example v1+
+
+FAILURE {"code": "Example.Failure.Code", "message": "example failure"}
+
+Request message INIT
+
+Introduced in bolt 1 Removed after bolt 2
+
+The INIT message is a request for the connection to be authorized for use with the remote database.
+
+The request message INIT is only valid in version 1 and 2 and is replaced by the request message HELLO in version 3+.
+
+The INIT message uses the structure signature 01 and passes two fields: user agent (String) and auth_token (Dictionary).
+
+The server must be in the CONNECTED state to be able to process an INIT request. For any other states, receipt of an INIT request must be considered a protocol violation and lead to connection closure.
+
+Clients should send INIT requests to the network immediately after connection and process the corresponding response before using that connection in any other way.
+
+A receiving server may choose to register or otherwise log the user agent but may also ignore it if preferred.
+
+The auth token should be used by the server to determine whether the client is permitted to exchange further messages. If this authentication fails, the server must respond with a FAILURE message and immediately close the connection. Clients wishing to retry initialization should establish a new connection.
+
+Signature: 01
+Fields:
+
+user_agent::String,
+auth_token::Dictionary(
+scheme::String,
+principal::String,
+credentials::String,
+)
+
+The user_agent should conform to "Name/Version" for example "Example/1.1.0" (see https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/User-Agent for more information).
+
+The scheme is the authentication scheme. Predefined schemes are "none" and "basic". If no scheme is provided, it defaults to "none".
+
+The auth_token must contain either just the entry {"scheme" : "none"} or the keys scheme, principal and credentials.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Detail messages:
+
+No detail messages should be returned.
+
+Valid Summary Messages:
+
+SUCCESS
+
+FAILURE
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Examples
+Synopsis
+
+INIT "user_agent" {auth_token}
+
+Example 1
+
+INIT "Example/1.0.0" {"scheme": "none"}
+
+Example 2
+
+INIT "Example/1.0.0" {"scheme": "basic", "principal": "neo4j", "credentials": "password"}
+
+Server response SUCCESS
+
+A SUCCESS message response indicates that the client is permitted to exchange further messages. Servers can include metadata that describes details of the server environment and/or the connection.
+
+The following fields are defined for inclusion in the SUCCESS metadata.
+
+server::String (server agent string, example "Neo4j/3.4.0")
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Example
+
+SUCCESS {"server": "Neo4j/3.4.0"}
+
+Server response FAILURE
+
+A FAILURE message response indicates that the client is not permitted to exchange further messages.
+
+Servers may choose to include metadata describing the nature of the failure but must immediately close the connection after the failure has been sent.
+Example
+
+FAILURE {"code": "Example.Failure.Code", "message": "example failure"}
+
+Request message LOGON
+
+Introduced in bolt 5.1
+
+A LOGON message carries an authentication request.
+
+This message is new in version 5.1. In previous versions, authentication was part of the HELLO message.
+
+Signature: 6A
+Fields:
+
+auth::Dictionary(
+scheme::String,
+...
+)
+
+The scheme is the authentication scheme. Predefined schemes are none, basic, bearer and kerberos (depending on the server’s capabilities).
+
+Further entries in the message are passed to the implementation of the chosen authentication scheme. Their names, types, and defaults depend on that choice.
+
+    The scheme basic requires a username principal::String and a password credentials::String.
+
+    The scheme bearer merely requires a token credentials::String.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Detail messages:
+
+No detail messages should be returned.
+
+Valid summary messages:
+
+SUCCESS
+
+FAILURE
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+If authentication fails, the server responds with a FAILURE message and immediately closes the connection.
+Examples
+Synopsis
+
+LOGON {auth}
+
+Example 1
+
+LOGON {"scheme": "basic", "principal": "user", "credentials": "password"}
+
+Server response SUCCESS
+
+A SUCCESS message response indicates that the client has been successfully authenticated.
+
+The following fields are defined for inclusion in the SUCCESS metadata.
+
+advertised_address::String? - the configured advertised address of the database server. Introduced in bolt 5.8
+
+credentials_expired::Boolean - the sent credentials are expired, the user must update them. If this field is not present, it should be considered to be false.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Example v5.8+
+
+SUCCESS {"advertised_address": "graphz.example.com:7687"}
+
+Example v5.1+
+
+SUCCESS {}
+
+Request message LOGOFF
+
+Introduced in bolt 5.1
+
+A LOGOFF message logs off the currently authenticated user. The connection is then ready for another LOGON message.
+
+This message is new in version 5.1. No equivalent exists in previous versions.
+
+Signature: 6B
+
+Fields: No fields
+
+Detail messages:
+
+No detail messages should be returned.
+
+Valid summary messages:
+
+SUCCESS
+
+FAILURE
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Examples
+Synopsis
+
+LOGOFF
+
+Example
+
+LOGOFF
+
+Server response SUCCESS
+
+If a LOGOFF message request has been successfully received, the server should respond with a SUCCESS message and enter the AUTHENTICATION state.
+Example
+
+SUCCESS {}
+
+Server response FAILURE
+
+If LOGOFF message is received while the server is not in the READY state, it should trigger a FAILURE followed by immediate closure of the connection. The server may attach metadata to the message to provide more detail on the nature of the failure. Clients receiving a FAILURE in response to LOGOFF should treat that connection as DEFUNCT and dispose of it.
+Example v5.7+
+
+FAILURE {"code": "Neo.ClientError.Request.Invalid", "message": "Message 'LogoffMessage{}' cannot be handled by a session in the FAILED state."}
+
+Example v5.1+
+
+FAILURE {"neo4j_code": "Neo.ClientError.Request.Invalid", "message": "Message 'LogoffMessage{}' cannot be handled by session in the READY state", "gql_status": "08N06", "description": "error: connection exception - protocol error. General network protocol error.", "diagnostic_record": {"_classification": "CLIENT_ERROR"}, "cause": {"message": "08N10: Message LogoffMessage{} cannot be handled by session in the 'READY' state.", "gql_status": "08N10", "description": "error: connection exception - invalid server state. Message LogoffMessage{} cannot be handled by session in the 'READY' state.", "diagnostic_record": {"_classification": "CLIENT_ERROR"}}}
+
+Request message TELEMETRY
+
+Introduced in bolt 5.4
+
+The TELEMETRY message contains an integer representing which driver API was used.
+
+The telemetry information is stored on the server’s metrics system. The client receives a SUCCESS response, unless it sends an invalid value for the api field, which results in a FAILURE response.
+
+Clients should offer the user the option to disable sending telemetry. Further, the server might opt out of receiving telemetry from the client by sending the corresponding configuration hint in the SUCCESS message of the HELLO message. See Appendix — Connection hints for more information. If the client ignores the hint, the server must still accept the TELEMETRY message.
+
+The message may only be sent in the READY state.
+
+Signature: 54
+Fields:
+
+api::Integer
+
+Valid values for api and the corresponding API associations are:
+
+0 — Managed transaction
+
+1 — Explicit transaction
+
+2 — Implicit transaction
+
+3 — Driver-level execute_query()
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Detail messages:
+
+No detail messages should be returned.
+
+Valid summary messages:
+
+SUCCESS
+
+FAILURE
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Examples
+Synopsis
+
+TELEMETRY api
+
+Example 1
+
+TELEMETRY 0
+
+Server response SUCCESS
+
+If a TELEMETRY message request is successfully received, the server responds with a SUCCESS and remains in its current state.
+Example
+
+SUCCESS {}
+
+Server response FAILURE
+
+If a TELEMETRY message contains a value that is not a valid api value or is sent in the wrong state, the server responds with a FAILURE message and enters the FAILED state.
+Example 1 v5.7+
+
+C: TELEMETRY 2
+S: FAILURE {"neo4j_code": "Neo.ClientError.Request.Invalid", "message": "Message of type TelemetryMessage cannot be handled by a session in the NEGOTIATION state.", "gql_status": "50N42", "description": "error: general processing exception - unexpected error. Unexpected error has occurred. See debug log for details."}
+
+Example 1 v5.4+
+
+C: TELEMETRY 2
+S: FAILURE {"code": "Neo.ClientError.Request.Invalid", "message": "Message of type TelemetryMessage cannot be handled by a session in the NEGOTIATION state."}
+
+Example 2 v5.7+
+
+C: TELEMETRY "oh no!"
+S: FAILURE {"neo4j_code": "Neo.ClientError.Request.Invalid", "message": "Unexpected type: Expected INT but got STRING", "gql_status": "22G03", "description": "error: data exception - invalid value type", "cause": {"message": "22N01: Expected the value 128 to be of type INT, but was of type STRING.", "gql_status": "22N01", "description": "error: data exception - invalid type. Expected the value 128 to be of type INT, but was of type STRING.", "diagnostic_record": {"_classification": "CLIENT_ERROR"}}}
+
+Example 2 v5.4+
+
+C: TELEMETRY "oh no!"
+S: FAILURE {"code": "Neo.ClientError.Request.Invalid", "message": "Unexpected type: Expected INT but got STRING"}
+
+Example 3 v5.7+
+
+C: TELEMETRY 9001
+S: FAILURE {"neo4j_code": "Neo.DatabaseError.General.UnknownError", "message": "org.neo4j.packstream.error.reader.PackstreamReaderException: Unknown driver interface type 9001", "gql_status": "50N00", "description": "error: general processing exception - internal error. Internal exception raised DecoderException: org.neo4j.packstream.error.reader.PackstreamReaderException: Unknown driver interface type 9001", "cause": {"message": "50N09: The server transitioned into a server state that is not valid in the current context: 'uncaught error'.", "gql_status": "50N09", "description": "error: general processing exception - invalid server state transition. The server transitioned into a server state that is not valid in the current context: 'uncaught error'.", "diagnostic_record": {"_classification": "DATABASE_ERROR"}}}
+
+Example 3 v5.4+
+
+C: TELEMETRY 9001
+S: FAILURE {"code": "Neo.DatabaseError.General.UnknownError", "message": "org.neo4j.packstream.error.reader.PackstreamReaderException: Unknown driver interface type 9001"}
+
+Request message GOODBYE
+
+Introduced in bolt 3
+
+The GOODBYE message notifies the server that the connection is terminating gracefully. On receipt of this message, the server should immediately shut down the socket on its side without sending a response.
+
+A client may shut down the socket at any time after sending the GOODBYE message. This message interrupts the server current work if there is any.
+
+Signature: 02
+
+Fields: No fields.
+
+Detail messages:
+
+No detail messages should be returned.
+
+Valid summary messages:
+
+No summary messages should be returned.
+Examples
+Synopsis
+
+GOODBYE
+
+Example
+
+GOODBYE
+
+Request message ACK_FAILURE
+
+Introduced in bolt 1 Removed after bolt 2
+
+The request message ACK_FAILURE signals to the server that the client has acknowledged a previous failure and should return to a READY state.
+
+The request message ACK_FAILURE is only valid in version 1 and 2 and the request message RESET should be used in its place in version 3+.
+
+Signature: 0E
+
+Fields: No fields.
+
+Detail messages:
+
+No detail messages should be returned.
+
+Valid summary messages:
+
+SUCCESS
+
+FAILURE
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+The server must be in a FAILED state to be able to successfully process an ACK_FAILURE request. For any other states, receipt of an ACK_FAILURE request will be considered a protocol violation and will lead to connection closure.
+Examples
+Synopsis
+
+ACK_FAILURE
+
+Example
+
+ACK_FAILURE
+
+Server response SUCCESS
+
+If an ACK_FAILURE request has been successfully received, the server should respond with a SUCCESS message and enter the READY state.
+
+The server may attach metadata to the SUCCESS message.
+Example
+
+SUCCESS {}
+
+Server response message FAILURE
+
+If an ACK_FAILURE request is received while not in the FAILED state, the server should respond with a FAILURE message and immediately close the connection.
+
+The server may attach metadata to the message to provide more detail on the nature of the failure.
+Example
+
+FAILURE {"code": "Example.Failure.Code", "message": "example failure"}
+
+Request message RESET
+
+Introduced in bolt 1
+
+The RESET message requests that the connection should be set back to its initial RESET state, as if a HELLO (INIT in v1 and v2) (and a LOGON in v5.1+) had just successfully completed. The RESET message is unique in that, on arrival at the server, it jumps ahead in the message queue, stopping any unit of work that happens to be executing. All the queued messages originally in front of the RESET message will then be IGNORED until the RESET position is reached. Then from this point, the server state is reset to a state that is ready for a new session.
+
+In version 1 and 2, the RESET message splits into two separate signals. First, an <INTERRUPT> signal jumps ahead in the message queue, stopping any unit of work that happens to be executing, and putting the state machine into an INTERRUPTED state. Second, the RESET queues along with all other incoming messages and is used to put the state machine back to READY when its turn for processing arrives. This essentially means that the INTERRUPTED state exists only transitionally between the arrival of a RESET in the message queue and the later processing of that RESET in its proper position. The INTERRUPTED state is therefore the only state to automatically resolve without any further input from the client and whose entry does not generate a response message.
+
+Signature: 0F
+
+Fields: No fields
+
+Detail messages:
+
+No detail messages should be returned.
+
+Valid summary messages:
+
+SUCCESS
+
+FAILURE
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Examples
+Synopsis
+
+RESET
+
+Example
+
+RESET
+
+Server response SUCCESS
+
+If a RESET message request has been successfully received, the server should respond with a SUCCESS message and enter the READY state.
+Example
+
+SUCCESS {}
+
+Server response FAILURE
+
+If RESET message is received before the server enters a READY state, it should trigger a FAILURE followed by immediate closure of the connection. The server may attach metadata to the message to provide more detail on the nature of the failure. Clients receiving a FAILURE in response to RESET should treat that connection as DEFUNCT and dispose of it.
+Example v5.7+
+
+FAILURE {"gql_status": "01N00", "message": "old message you have failed something", "description": "default condition - default subcondition. Message", "neo4j_code": "Example.Failure.Code", "diagnostic_record": {"_classification": "CLIENT_ERROR"}}
+
+Example v1-v5.6
+
+FAILURE {"code": "Example.Failure.Code", "message": "example failure"}
+
+Request message RUN
+
+Introduced in bolt 1
+
+The RUN message requests that a Cypher query is executed with a set of parameters and additional extra data.
+
+In version 3+, this message can both be used in an Explicit Transaction or an Auto-commit Transaction. The transaction type is implied by the message sequence:
+
+Explicit Transaction: RUN while inside a transaction context started with BEGIN first.
+
+Auto-commit Transaction: RUN without having started an explicit transaction with BEGIN first.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+In version 5.2, notifications_minimum_severity::String and notifications_disabled_categories::List<String> were added to be able to control the notification config. Disabling categories or severities allows the server to skip analysis for those, which can speed up query execution.
+
+Signature: 10
+Fields:
+
+query::String,
+parameters::Dictionary,
+extra::Dictionary(
+bookmarks::List<String>,
+tx_timeout::Integer,
+tx_metadata::Dictionary,
+mode::String,
+db::String,
+imp_user::String,
+notifications_minimum_severity::String,
+notifications_disabled_categories::List<String>
+)
+
+The query can be any Cypher query (including a procedure call).
+
+The parameters is a dictionary of parameters to be used in the query string.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+An Explicit Transaction (BEGIN+RUN) does not carry any data in the extra field.
+
+For Auto-commit Transaction (RUN) the extra field carries:
+
+extra contains additional options. Introduced in bolt 3
+
+    The bookmarks is a list of strings containing some kind of bookmark identification, e.g., ["neo4j-bookmark-transaction:1", "neo4j-bookmark-transaction:2"]. Default: [].
+
+    The tx_timeout is an integer in that specifies a transaction timeout in ms. Default: server-side configured timeout.
+
+    The tx_metadata is a dictionary that can contain some metadata information, mainly used for logging. Default: null.
+
+    The mode specifies what kind of server the RUN message is targeting. For write access use "w" and for read access use "r". Default: "w".
+
+    The db specifies the database name for multi-database to select where the transaction takes place. null and "" denote the server-side configured default database. Default: null. Introduced in bolt 4.0
+
+    The imp_user key specifies the impersonated user which executes this transaction. null denotes no impersonation (execution takes place as the current user). Default: null. Introduced in bolt 4.4
+
+    The notifications_minimum_severity specifies the minimum severity a notification needs to have to be returned. Please see Status Codes → Server notification grouping and filtering for acceptable entries, with the special value "OFF" added to the protocol, which disables all notifications. Sending null will make the server use whatever was specified in the HELLO message of the current connection. Default: null. Introduced in bolt 5.2
+
+    The notifications_disabled_categories is a list of notification categories that will not be returned. Please see Status Codes → Server notification grouping and filtering for available categories. Sending null will make the server use whatever was specified in the HELLO message of the current connection. Default: null. Introduced in bolt 5.2
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Detail messages:
+
+No detail messages should be returned.
+
+Valid summary messages:
+
+SUCCESS
+
+IGNORED
+
+FAILURE
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+The server must be in a READY or READY_TX (v3+) state to be able to successfully process a RUN request. If the server is in a FAILED or INTERRUPTED state, the request will be IGNORED. For any other states, receipt of a RUN request will be considered a protocol violation and will lead to connection closure.
+Examples
+Synopsis
+
+RUN "query" {parameters} {extra}
+
+Example 1
+
+RUN "RETURN $x AS x" {"x": 1} {"bookmarks": [], "tx_timeout": 123, "tx_metadata": {"log": "example_message"}, "mode": "r"}
+
+Example 2
+
+RUN "RETURN $x AS x" {"x": 1} {}
+
+Example 3
+
+RUN "CALL dbms.procedures()" {} {}
+
+Example 3
+
+RUN "RETURN 42" {} {"notifications_minimum_severity": "WARNING", "notifications_disabled_categories": ["HINT", "GENERIC"]}
+
+Server response SUCCESS
+
+A SUCCESS message response indicates that the client is permitted to exchange further messages.
+
+The following fields are defined for inclusion in the SUCCESS metadata.
+
+fields::List<String>, the fields of the return result. e.g. [“name”, “age”, …]
+
+t_first::Integer, the time, specified in ms, which the first record in the result stream is available after.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+For Implicit Transaction (RUN):
+
+db::String? - resolved user’s home database that the transaction will run into. The field is only present if the client did not explicitly provide a database to start the transaction for. Introduced in bolt 5.8
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+For Explicit Transaction (BEGIN+RUN):
+
+qid::Integer specifies the server assigned statement ID to reference the server side result-set with commencing BEGIN`RUN`PULL and BEGIN`RUN`DISCARD messages. Introduced in bolt 4.0
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Example v4.0+
+
+SUCCESS {"fields": ["x"], "t_first": 123, "qid": 7000}
+
+Example v3+
+
+SUCCESS {"fields": ["x"], "t_first": 123}
+
+For v1 and v2, if a RUN request has been successfully received and is considered valid by the server, the server should respond with a SUCCESS message and enter the STREAMING state. The server may attach metadata to the message to provide header detail for the results that follow. Clients should not consider a SUCCESS response to indicate completion of the execution of that query, merely acceptance of it. The following fields are defined for inclusion in the metadata:
+
+`fields` (e.g. ["name", "age"])
+
+`result_available_after` (e.g. 123)
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Example v1 and v2
+
+SUCCESS {"fields": ["x"], "result_available_after": 123}
+
+Server response IGNORED
+Example
+
+IGNORED
+
+Server response FAILURE
+Example v5.7+
+
+FAILURE {"gql_status": "01N00", "message": "old message you have failed something", "description": "default condition - default subcondition. Message", "neo4j_code": "Example.Failure.Code", "diagnostic_record": {"_classification": "CLIENT_ERROR"}}
+
+Example v1 - v5.6
+
+FAILURE {"code": "Example.Failure.Code", "message": "example failure"}
+
+Request message DISCARD
+
+Introduced in bolt 1
+
+The DISCARD message requests that the remainder of the result stream should be thrown away.
+
+In v1, v2 and v3, this message is called DISCARD_ALL, has no fields and issues a request to discard the outstanding result and return to a READY state. A receiving server should not abort the request but continue to process it without streaming any detail messages back to the client.
+
+Signature: 2F
+Fields:
+
+extra::Dictionary(
+n::Integer,
+qid::Integer
+)
+
+extra contains additional options. Introduced in bolt 4.0
+
+    The n specifies how many records to throw away. n=-1 will throw away all records. n has no default and must be present.
+
+    The qid (query identification) specifies for which statement the operation should be carried out (Explicit Transaction only). qid=-1 can be used to denote the last executed statement. Default: -1.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Detail messages:
+
+No detail messages should be returned.
+
+Valid summary messages:
+
+SUCCESS
+
+IGNORED
+
+FAILURE
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Examples
+Synopsis
+
+DISCARD {extra}
+
+Example 1
+
+DISCARD {"n": -1, "qid": -1}
+
+Example 2
+
+DISCARD {"n": 1000}
+
+Example 3 v1, v2 or v3
+
+DISCARD_ALL
+
+In version 1 and 2, the server must be in a STREAMING or STREAMING_TX (v3+) state to be able to successfully process a DISCARD request. If the server is in a FAILED state or INTERRUPTED state, the request will be IGNORED. For any other states, receipt of a DISCARD request will be considered a protocol violation and will lead to connection closure.
+Server response SUCCESS
+
+has_more::Boolean, true if there are no more records to stream. If this field is not present, it should be considered to default to false. Introduced in bolt 4.0
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Or in the case that has_more is false:
+
+bookmark::String — the bookmark after committing this transaction (Autocommit Transaction only).
+
+db::String — the database name where the query was executed. Introduced in bolt 4.0
+
+notifications::List<Dictionary> — a list of all notifications generated during execution of this statement. May be omitted if no notifications exist. In v3, this field is notifications::Dictionary. Introduced in bolt 3 Removed after bolt 5.4
+
+statuses::List<Dictionary> — a list of all gqlStatusObjects generated during execution of this statement. Introduced in bolt 5.6
+
+plan::Dictionary — plan result. Introduced in bolt 3
+
+profile::Dictionary — profile result. Introduced in bolt 3
+
+result_consumed_after::Integer — same as t_last. Removed after bolt 2
+
+result_available_after::Integer — same as t_first. Removed after bolt 2
+
+stats::Dictionary — counter information, such as db-hits etc. Introduced in bolt 3
+
+t_last::Integer — the time (in ms) after which the last record in the result stream is consumed. Introduced in bolt 3
+
+t_first::Integer — the time (in ms) after which the DBMS was ready to stream the first record in the result. Introduced in bolt 3
+
+type::String — the type of the statement, e.g. "r" for read-only statement, "w" for write-only statement, "rw" for read-and-write, and "s" for schema only. Introduced in bolt 3
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Example 1 v4+
+
+SUCCESS {"has_more": true}
+
+Example 2 v4+
+
+SUCCESS {"bookmark": "example-bookmark:1", "db": "example_database"}
+
+Example v3
+
+SUCCESS {"bookmark": "example-bookmark:1"}
+
+In version 1 and 2, if a DISCARD_ALL request has been successfully received, the server should respond with a SUCCESS message and enter the READY state.
+Example v1 and v2
+
+SUCCESS {"bookmark": "example_bookmark_identifier", "result_consumed_after": 123}
+
+Request message PULL
+
+The PULL message requests data from the remainder of the result stream.
+
+In v1, v2, and v3, this message is called PULL_ALL and has no fields. In v1 and v2, this message issues a request to stream the outstanding result back to the client, before returning to a READY state. Result detail consists of zero or more detail messages being sent before the summary message. This version of the protocol defines one such detail message, namely RECORD (described below).
+
+Signature: 3F
+Fields:
+
+extra::Dictionary(
+n::Integer,
+qid::Integer
+)
+
+extra contains additional options. Introduced in bolt 4.0
+
+    The n specifies how many records to fetch. n=-1 will fetch all records. n has no default and must be present.
+
+    The qid (query identification) specifies for which statement the operation should be carried out (Explicit Transaction only). qid=-1 can be used to denote the last executed statement. Default: -1.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Detail messages:
+
+Zero or more RECORD.
+
+Valid summary messages:
+
+SUCCESS
+
+IGNORED
+
+FAILURE
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Examples
+Synopsis
+
+PULL {extra}
+
+Synopsis v1 - v3
+
+PULL_ALL
+
+Example 1
+
+PULL {"n": -1, "qid": -1}
+
+Example 2
+
+PULL {"n": 1000}
+
+Example v1 - v3
+
+PULL_ALL
+
+Server response SUCCESS
+
+The following fields are defined for inclusion in the SUCCESS metadata:
+
+has_more::Boolean, true if there are more records to stream. If this field is not present it should be considered to default to false.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Or in the case that has_more is false:
+
+bookmark::String — the bookmark after committing this transaction (Autocommit Transaction only).
+
+db::String — the database name where the query was executed. Introduced in bolt 4.0
+
+notifications::List<Dictionary> — a list of all notifications generated during execution of this statement. May be omitted if no notifications exist. In v3, this field is notifications::Dictionary. Removed after bolt 5.4
+
+statuses::List<Dictionary> — a list of all gqlStatusObjects generated during execution of this statement. Introduced in bolt 5.6
+
+plan::Dictionary — plan result. Introduced in bolt 3
+
+profile::Dictionary — profile result. Introduced in bolt 3
+
+result_consumed_after::Integer — same as t_last. Removed after bolt 2
+
+result_available_after::Integer — same as t_first. Removed after bolt 2
+
+stats::Dictionary — counter information, such as db-hits etc. Introduced in bolt 3
+
+t_last::Integer — the time (in ms) after which the last record in the result stream is consumed. Introduced in bolt 3
+
+t_first::Integer — the time (in ms) after which the first record in the result stream is available. Introduced in bolt 3
+
+type::String — the type of the statement, e.g. "r" for read-only statement, "w" for write-only statement, "rw" for read-and-write, and "s" for schema only. Introduced in bolt 3
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Example v3+
+
+SUCCESS {"bookmark": "example-bookmark:1", "t_last": 123}
+
+Example v1 - v2
+
+SUCCESS {"bookmark": "example_bookmark_identifier", "result_consumed_after": 123}
+
+Server response IGNORED
+
+For v1 and v2, a server that receives a PULL_ALL request while in FAILED state or INTERRUPTED state, should respond with an IGNORED message and discard the request without processing it. No state change should occur.
+Example
+
+IGNORED
+
+Server response FAILURE
+
+For v1 and v2, a PULL_ALL message request cannot be processed successfully, the server should respond with a FAILURE message and enter the FAILED state. The server may attach metadata to the message to provide more detail on the nature of the failure.
+Example v5.7+
+
+FAILURE {"gql_status": "01N00", "message": "old message you have failed something", "description": "default condition - default subcondition. Message", "neo4j_code": "Example.Failure.Code", "diagnostic_record": {"_classification": "CLIENT_ERROR"}}
+
+Example v1 - v5.6
+
+FAILURE {"code": "Example.Failure.Code", "message": "example failure"}
+
+Server response RECORD (in v1 and v2)
+
+Zero or more RECORD messages may be returned in response to a PULL_ALL prior to the trailing summary message. Each record carries with it a list of values which form the data content of the record. The order of the values within the list should be meaningful to the client, perhaps based on a requested ordering for that result, but no guarantees should be made around the order of records within the result. A record should only be considered valid if followed by a SUCCESS summary message. Until this summary has been received, the record’s validity should be considered tentative.
+Example
+
+RECORD [1, 2, 3]
+
+Request massage BEGIN
+
+Introduced in bolt 1
+
+The BEGIN message request the creation of a new Explicit Transaction. This message should then be followed by a RUN message. The Explicit Transaction is closed with either the COMMIT message or ROLLBACK message.
+
+In version 5.2, notifications_minimum_severity::String and notifications_disabled_categories::List<String> were added to be able to control the notification config. Disabling categories or severities allows the server to skip analysis for those, which can speed up query execution.
+
+Signature: 11
+Fields:
+
+extra::Dictionary(
+bookmarks::List<String>,
+tx_timeout::Integer,
+tx_metadata::Dictionary,
+mode::String,
+db::String,
+imp_user::String,
+notifications_minimum_severity::String,
+notifications_disabled_categories::List<String>
+)
+
+The bookmarks is a list of strings containing some kind of bookmark identification e.g ["neo4j-bookmark-transaction:1", "neo4j-bookmark-transaction:2"]. Default: [].
+
+The tx_timeout is an integer in that specifies a transaction timeout in ms. Default: server-side configured timeout.
+
+The tx_metadata is a dictionary that can contain some metadata information, mainly used for logging. Default: null.
+
+The mode specifies what kind of server the RUN message is targeting. For write access use "w" and for read access use "r". Defaults to write access if no mode is sent. Default: "w".
+
+The db specifies the database name for multi-database to select where the transaction takes place. null and "" denote the server-side configured default database. Default: null. Introduced in bolt 4.0
+
+The imp_user key specifies the impersonated user which executes this transaction. null denotes no impersonation (execution takes place as the current user). Default: null. Introduced in bolt 4.4
+
+The notifications_minimum_severity specifies the minimum severity a notification needs to have to be returned. Please see the Status Codes → Server notification grouping and filtering for acceptable entries, with the special value "OFF" added to the protocol, which disables all notifications. Sending null will make the server use whatever was specified in the HELLO message of the current connection. Default: null. Introduced in bolt 5.2
+
+The notifications_disabled_categories is a list of notification categories that will not be returned. Please see Status Codes → Server notification grouping and filtering for available categories. Sending null will make the server use whatever was specified in the HELLO message of the current connection. Default: null. Introduced in bolt 5.2
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Detail messages:
+
+No detail messages.
+
+Valid summary messages:
+
+SUCCESS
+
+IGNORED
+
+FAILURE
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Examples
+Synopsis
+
+BEGIN {extra}
+
+Example 1
+
+BEGIN {"tx_timeout": 123, "mode": "r", "db": "example_database", "tx_metadata": {"log": "example_log_data"}, "imp_user" : "bob"}
+
+Example 2
+
+BEGIN {"db": "example_database", "tx_metadata": {"log": "example_log_data"}, "bookmarks": ["example-bookmark:1", "example-bookmark2"]}
+
+Example 3
+
+BEGIN {"notifications_minimum_severity": "WARNING", "notifications_disabled_categories": ["HINT", "GENERIC"]}
+
+Server response SUCCESS
+
+The following fields are defined for inclusion in the SUCCESS metadata:
+
+db::String? - resolved user’s home database that the transaction will run into. The field is only present if the client did not explicitly provide a database to start the transaction for. Introduced in bolt 5.8
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Example
+
+SUCCESS {}
+
+Example with Home Database Resolution
+
+SUCCESS {"db": "my_home_db"}
+
+Server response IGNORED
+Example
+
+IGNORED
+
+Server response FAILURE
+Example v5.7+
+
+FAILURE {"gql_status": "01N00", "message": "old message you have failed something", "description": "default condition - default subcondition. Message", "neo4j_code": "Example.Failure.Code", "diagnostic_record": {"_classification": "CLIENT_ERROR"}}
+
+Example v1 - v5.6
+
+FAILURE {"code": "Example.Failure.Code", "message": "example failure"}
+
+Request message COMMIT
+
+The COMMIT message request that the Explicit Transaction is done.
+
+The COMMIT message does not exist in v1 and v2.
+
+Signature: 12
+
+Fields: No fields.
+
+Detail messages:
+
+No detail messages.
+
+Valid summary messages:
+
+SUCCESS
+
+IGNORED
+
+FAILURE
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Examples
+Synopsis
+
+COMMIT
+
+Example
+
+COMMIT
+
+Server response SUCCESS
+
+A SUCCESS message response indicates that the Explicit Transaction was completed:
+
+bookmark::String, the bookmark after committing this transaction.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Example
+
+SUCCESS {"bookmark": "example-bookmark:1"}
+
+Server response IGNORED
+Example
+
+IGNORED
+
+Server response FAILURE
+Example v5.7+
+
+FAILURE {"gql_status": "01N00", "message": "old message you have failed something", "description": "default condition - default subcondition. Message", "neo4j_code": "Example.Failure.Code", "diagnostic_record": {"_classification": "CLIENT_ERROR"}}
+
+Example v1 - v5.6
+
+FAILURE {"code": "Example.Failure.Code", "message": "example failure"}
+
+Request message ROLLBACK
+
+The ROLLBACK message requests that the Explicit Transaction rolls back.
+
+The ROLLBACK message does not exist in v1 and v2.
+
+Signature: 13
+
+Fields: No fields.
+
+Detail messages:
+
+No detail messages.
+
+Valid summary messages:
+
+SUCCESS
+
+IGNORED
+
+FAILURE
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Examples
+Synopsis
+
+ROLLBACK
+
+Example
+
+ROLLBACK
+
+Server response SUCCESS
+
+A SUCCESS message response indicates that the Explicit Transaction was rolled back.
+Example
+
+SUCCESS
+
+Server response IGNORED
+Example
+
+IGNORED
+
+Server response FAILURE
+Example v5.7+
+
+FAILURE {"gql_status": "01N00", "message": "old message you have failed something", "description": "default condition - default subcondition. Message", "neo4j_code": "Example.Failure.Code", "diagnostic_record": {"_classification": "CLIENT_ERROR"}}
+
+Example v1 - v5.6
+
+FAILURE {"code": "Example.Failure.Code", "message": "example failure"}
+
+Request message ROUTE
+
+Introduced in bolt 4.3
+
+The ROUTE instructs the server to return the current routing table. In previous versions there was no explicit message for this and a procedure had to be invoked using Cypher through the RUN and PULL messages.
+
+This message can only be sent after successful authentication and outside of transactions.
+
+Signature: 66
+Fields:
+
+routing::Dictionary,
+bookmarks::List<String>,
+db::String,
+extra::Dictionary(
+db::String,
+imp_user::String,
+)
+
+Note that in v4.4, the db parameter is migrated into a dedicated dictionary named extra that also includes the imp_user and thus, in v4.3 the fields are:
+
+routing::Dictionary,
+bookmarks::List<String>,
+db::String
+
+The routing field should contain routing context information and the address field that should contain the address that the client initially tries to connect with e.g. "x.example.com:9001". Key-value entries in the routing context should correspond exactly to those in the original URI query string.
+
+The bookmarks is a list of strings containing some kind of bookmark identification e.g ["neo4j-bookmark-transaction:1", "neo4j-bookmark-transaction:2"].
+
+The db specifies the database name for multi-database to select where the transaction takes place. null denotes the server-side configured default database. Removed after bolt 4.3
+
+extra contains additional options. Introduced in bolt 4.4
+
+    db as above. Default: null.
+
+    The imp_user specifies the impersonated user for the purposes of resolving their home database. null denotes no impersonation (execution takes place as the current user). Default: null.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Detail messages:
+
+No detail messages should be returned.
+
+Valid summary messages:
+
+SUCCESS
+
+IGNORED
+
+FAILURE
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Examples
+Synopsis
+
+ROUTE {routing} [bookmarks] {extra}
+
+Example v4.4+
+
+ROUTE {"address": "x.example.com:9001", "policy": "example_policy_routing_context", "region": "example_region_routing_context"} ["neo4j-bookmark-transaction:1", "neo4j-bookmark-transaction:2"] {"db": "example_database", "imp_user": "bob"}
+
+Example v4.3
+
+ROUTE {"address": "x.example.com:7687"} [] null
+
+Server response SUCCESS
+
+A SUCCESS message response indicates that the client is permitted to exchange further messages. The following fields are defined for inclusion in the SUCCESS metadata:
+
+rt::Dictionary(ttl::Integer, db::String, servers::List<Dictionary(addresses::List<String>, role::String)>), the current routing table.
+
+    ttl::Integer specifies for how many seconds this routing table should be considered valid.
+
+    db::String identifies the database for which this routing table applies. Introduced in bolt 4.4
+
+    servers have three elements of the type Dictionary(addresses::List<String>, role::String), where role is one of "ROUTE", "READ", "WRITE" for exactly one entry each.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Example v4.4+
+
+SUCCESS {
+"rt": {"ttl": 1000,
+"db": "foo",
+"servers": [{"addresses": ["localhost:9001"], "role": "ROUTE"},
+{"addresses": ["localhost:9010", "localhost:9012"], "role": "READ"},
+{"addresses": ["localhost:9020", "localhost:9022"], "role": "WRITE"}]}
+}
+
+Example v4.3
+
+SUCCESS {
+"rt": {"ttl": 1000,
+"servers": [{"addresses": ["localhost:9001"], "role": "ROUTE"},
+{"addresses": ["localhost:9010", "localhost:9012"], "role": "READ"},
+{"addresses": ["localhost:9020", "localhost:9022"], "role": "WRITE"}]}
+}
+
+Server message IGNORED
+Example
+
+IGNORED
+
+Server message FAILURE
+Example v5.7+
+
+FAILURE {"gql_status": "01N00", "message": "old message you have failed something", "description": "default condition - default subcondition. Message", "neo4j_code": "Example.Failure.Code", "diagnostic_record": {"_classification": "CLIENT_ERROR"}}
+
+Example v4.3 - v5.6
+
+FAILURE {"code": "Example.Failure.Code", "message": "example failure"}
+
+Summary message SUCCESS
+
+The SUCCESS message indicates that the corresponding request has succeeded as intended. It may contain metadata relating to the outcome. Metadata keys are described in the section of this document relating to the message that began the exchange.
+
+Signature: 70
+Fields:
+
+metadata::Dictionary
+
+Examples
+Synopsis
+
+SUCCESS {metadata}
+
+Example
+
+SUCCESS {"example": "see specific message for server response metadata"}
+
+Summary message IGNORED
+
+The IGNORED message indicates that the corresponding request has not been carried out.
+
+Signature: 7E
+
+Fields: No fields.
+Examples
+Synopsis
+
+IGNORED
+
+Example
+
+IGNORED
+
+Summary message FAILURE
+
+Signature: 7F
+Fields:
+
+metadata::Dictionary
+
+The following fields are defined in the metadata:
+
+message::String - the human readable description of the failure.
+
+code::String - the neo4j code identifying the failure. Removed after bolt 5.6
+
+neo4j_code::String - the neo4j code identifying the failure. Introduced in bolt 5.7
+
+gql_status::String - the GQL status which identifies the error. This should be used in favor of neo4j_code. See more about GQL-status notification object. Introduced in bolt 5.7
+
+description::String - describes the failure represented by gql_status. Introduced in bolt 5.7
+
+diagnostic_record::Dictionary - contains fields for helping diagnosing the status. Omitted when content is default. Introduced in bolt 5.7
+
+    OPERATION::String - GQL standard field. Default: ""
+
+    OPERATION_CODE::String - GQL standard field. Default: "0"
+
+    CURRENT_SCHEMA::String - GQL standard field. Default: "/"
+
+    _classification::String? - classifies the failure.
+
+cause:Dictionary(message::String, gql_status::String, description::String, diagnostic_record::Dictionary, cause::Dictionary?)? - the inner cause of the error. This fields provides more specific details and context about the failure. Introduced in bolt 5.7
+
+The diagnostic_record field can contain extra and undocumented entries. This information can be important for diagnosing failures.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Examples
+Synopsis
+
+FAILURE {metadata}
+
+Example v5.7+
+
+FAILURE {"gql_status": "01N00", "message": "old message you have failed something", "description": "default condition - default subcondition. Message", "neo4j_code": "Example.Failure.Code", "diagnostic_record": {"_classification": "CLIENT_ERROR"}}
+
+Example v1 - v5.6
+
+FAILURE {"code": "Example.Failure.Code", "message": "example failure"}
+
+Detail message RECORD
+
+A RECORD message carries a sequence of values corresponding to a single entry in a result.
+
+Signature: 71
+
+These messages are currently only ever received in response to a PULL (PULL_ALL in v1, v2, and v3) message and will always be followed by a summary message.
+Examples
+Synopsis
+
+RECORD [data]
+
+Example 1
+
+RECORD ["1", "2", "3"]
+
+Example 2
+
+RECORD [{"point": [1, 2]}, "example_data", 123]
+
+Summary of changes per version
+
+The sections below list the changes of messages compared to the previous version. Please also check for changes in Structure Semantics.
+Version 5.8
+
+Introduce connection hint ssr.enabled
+
+Introduce advertised_address as response metadata of LOGON
+
+SUCCESS message of begin transaction messages (BEGIN or RUN) contains resolved home database as db.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Version 5.7
+
+FAILURE message was changed to have gql_status, description, diagnostic_record and cause. code was renamed to neo4j_code.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Version 5.6
+
+SUCCESS messages that contain a notifications field were changed to have a field statuses instead.
+
+    SUCCESS on PULL
+
+    SUCCESS on DISCARD
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Version 5.5
+
+Unsupported (and undocumented 😏) protocol version
+
+Version 5.5 was only ever released in some drivers, but has a flawed design. No Neo4j server will negotiate this protocol version.
+Version 5.4
+
+A new message TELEMETRY is added.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Version 5.3
+
+A new field bolt_agent is added to the HELLO message’s extra dictionary.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Version 5.2
+
+HELLO, BEGIN and RUN messages now accept notifications options notifications_minimum_severity and notifications_disabled_categories.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Version 5.1
+
+HELLO message no longer accepts authentication.
+
+LOGON message has been added and accepts authentication.
+
+LOGOFF message has been added.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Version 5
+
+No changes from version 4.4
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Version 4.4
+
+The db parameter within the ROUTE message is migrated into a dedicated dictionary named extra.
+
+An imp_user parameter is added to the meta fields within ROUTE, RUN and BEGIN messages respectively.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Version 4.3
+
+NOOP chunks may now be transmitted in all connection states when a connection remains in idle for extended periods of time while the server is busy processing a request.
+
+An additional hints dictionary is added to the metadata property of the SUCCESS structure transmitted in response to the HELLO command in order to provide optional configuration hints to drivers.
+
+A new message ROUTE to query the routing table is added.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Version 4.2
+
+No changes compared to version 4.1.
+Version 4.1
+
+The HELLO message, defines the sub-field routing::Dictionary(address::String) to indicate if server side routing should be performed and can include routing context data.
+
+Support for NOOP chunk (empty chunk). Both server and client should support this.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Version 4.0
+
+DISCARD_ALL message renamed to DISCARD and introduced new fields.
+
+PULL_ALL message renamed to PULL and introduced new fields.
+
+The BEGIN message now have a field db::String to specify a database name.
+
+The RUN message now have a field db::String to specify a database name.
+
+Explicit Transaction (BEGIN+RUN) can now get a server response with a SUCCESS and metadata key qid (query identification).
+
+The DISCARD message can now discard an arbitrary number of records. New fields n and qid.
+
+The DISCARD message can now get a server response with a SUCCESS and metadata key has_more.
+
+The PULL message can now fetch an arbitrary number of records. New fields n and qid.
+
+The PULL message can now get a server response with a SUCCESS and metadata key has_more.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Version 3
+
+The INIT request message is replaced with HELLO message.
+
+The ACK_FAILURE request message is removed. Use RESET message instead.
+
+Added extra::Dictionary field to RUN message.
+
+Added extra::Dictionary field to BEGIN message.
+
+New HELLO request message.
+
+New GOODBYE request message.
+
+New BEGIN request message.
+
+New COMMIT request message.
+
+New ROLLBACK request message.
+
+New RESET request message.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Version 2
+
+No changes compared to version 1.
+
+Byte values are represented using hexadecimal notation unless otherwise specified.
+Endianness
+
+Bolt requires that all values that can vary by endianness should be transmitted using network byte order, also known as big-endian byte order. This means that the most significant part of the value is written to the network or memory space first and the least significant part is written last.
+Connection and disconnection
+
+Bolt communication is intended to take place over a TCP connection. The default port is TCP 7687 but any port can be used.
+
+There is no formal shutdown procedure for a Bolt connection. Either peer may close the connection at TCP level at any time. Both client and server should be prepared for that to occur and should handle it appropriately.
+Handshake
+
+Immediately following a successful connection, the client MUST initiate a handshake. This handshake is a fixed exchange used to determine the version of messaging protocol that follows.
+Bolt identification
+
+The first part of the handshake is used to identify to the server that this is a Bolt connection. It should be sent by a client immediately following the establishment of a successful connection and does not require a server response.
+
+The identification consists of the following four bytes:
+
+C: 60 60 B0 17
+
+Version negotiation
+
+After identification, a small client-server exchange occurs to determine which version of the messaging protocol to use. In this, the client submits exactly four protocol versions, each encoded as a big-endian 32-bit unsigned integer for a total of 128 bits. Protocol version zero can be used as a placeholder if fewer than four versions are required in the exchange. Should a match be found for a version supported by the server, the response will contain that version encoded as a single 32-bit integer. If no match is found, a zero value is returned followed by immediate closure of the connection by the server.
+
+Within this exchange, a zero value (four zero bytes) always represents “no protocol version”. For the client, this can be used as a filler if fewer than four protocol versions are known. For the server, this indicates no version match has been found.
+
+A server should assume that the versions contained within a client’s request have been sent in order of preference. Therefore, if a match occurs for more than one version, the first match should be selected.
+Example where the client is aware of the Bolt protocol version 1 and the server responds with version 1.
+
+C: 60 60 B0 17
+C: 00 00 00 01 00 00 00 00 00 00 00 00 00 00 00 00
+S: 00 00 00 01
+
+Example where the client is aware of the Bolt protocol versions 1 and 2, and the server responds with version 2.
+
+C: 60 60 B0 17
+C: 00 00 00 02 00 00 00 01 00 00 00 00 00 00 00 00
+S: 00 00 00 02
+
+Example where the client is aware of the Bolt protocol versions 1, 2 and 3, and the server responds with version 2.
+
+C: 60 60 B0 17
+C: 00 00 00 03 00 00 00 02 00 00 00 01 00 00 00 00
+S: 00 00 00 02
+
+Example where the client is aware of the Bolt protocol version 3 but the server responds with no version, the server do not support communication with the client.
+
+C: 60 60 B0 17
+C: 00 00 00 03 00 00 00 00 00 00 00 00 00 00 00 00
+S: 00 00 00 00
+
+Bolt version 4.3
+
+With Bolt version 4.3, the version scheme supports ranges of minor versions. The first 8 bits are reserved. The next 8 bits represent the number of consecutive minor versions below the specified minor (next 8 bits) and major (next 8 bits) version that are supported.
+
+The range cannot span multiple major versions.
+Example with versions 4.3 plus two previous minor versions, 4.2 and 4.1
+
+00 02 03 04
+
+Example where the client is aware of five Bolt versions; 3, 4.0, 4.1, 4.2 and 4.3, and the server responds with 4.1
+
+C: 60 60 B0 17
+C: 00 03 03 04 00 00 01 04 00 00 00 04 00 00 00 03
+S: 00 00 01 04
+
+The client has to specify all versions prior to 4.3 explicitly since servers that only support those protocol versions might not support ranges. The example makes use of the fact that Bolt 4.1 and 4.2 are equivalent and only offer 4.3, 4.2, 4.0, and 3, but specify a range (4.3-4.0), in case the server supports ranges.
+Bolt version 4.0
+
+With Bolt version 4.0 the version scheme supports major and minor versioning number. The first 16 bits are reserved. 8 bits represents the minor version. 8 bits represents the major version.
+Example with version 4.1
+
+00 00 01 04
+
+Example where the client is aware of three Bolt versions; 3, 4.0 and 4.1, and the server responds with 4.1.
+
+C: 60 60 B0 17
+C: 00 00 01 04 00 00 00 04 00 00 00 03 00 00 00 00
+S: 00 00 01 04
+
+Structure Semantics
+
+While PackStream defines what a Structure looks like, it does not define what it means. The semantics of Structures are bound to the Bolt Protocol version.
+
+The table below lists the PackStream specified structures and their code and tag byte across all currently existing Bolt Protocol versions.
+Structures
+Structure name 	Code 	tag byte
+
+Node
+
+N
+
+4E
+
+Relationship
+
+R
+
+52
+
+UnboundRelationship
+
+r
+
+72
+
+Path
+
+P
+
+50
+
+Date
+
+D
+
+44
+
+Time
+
+T
+
+54
+
+LocalTime
+
+t
+
+74
+
+DateTime
+
+I
+
+49
+
+DateTimeZoneId
+
+i
+
+69
+
+LocalDateTime
+
+d
+
+64
+
+Duration
+
+E
+
+45
+
+Point2D
+
+X
+
+58
+
+Point3D
+
+Y
+
+59
+
+Legacy Structures
+
+Legacy DateTime
+
+F
+
+46
+
+Legacy DateTimeZoneId
+
+f
+
+66
+Node
+
+A snapshot of a node within a graph database.
+
+The element_id field was added with version 5.0 and does not exist in earlier versions.
+
+tag byte: 4E
+
+Number of fields: 4 (3 before version 5.0)
+
+Node::Structure(
+id::Integer,
+labels::List<String>,
+properties::Dictionary,
+element_id::String,
+)
+
+Example of a node structure
+
+Node(
+id = 3,
+labels = ["Example", "Node"],
+properties = {"name": "example"},
+element_id = "abc123",
+)
+
+B4 4E
+...
+
+Relationship
+
+A snapshot of a relationship within a graph database.
+
+The fields element_id, start_node_element_id, and end_node_element_id were added with version 5.0 and do not exist in earlier versions.
+
+tag byte: 52
+
+Number of fields: 8 (5 before version 5.0)
+
+Relationship::Structure(
+id::Integer,
+startNodeId::Integer,
+endNodeId::Integer,
+type::String,
+properties::Dictionary,
+element_id::String,
+start_node_element_id::String,
+end_node_element_id::String,
+)
+
+Example of a relationship structure
+
+Relationship(
+id = 11,
+startNodeId = 2,
+endNodeId = 3,
+type = "KNOWS",
+properties = {"name": "example"},
+element_id = "abc123",
+start_node_element_id = "def456",
+end_node_element_id = "ghi789",
+)
+
+B8 52
+...
+
+UnboundRelationship
+
+A relationship without start or end node ID. It is used internally for Path serialization.
+
+The element_id field was added with version 5.0 and does not exist in earlier versions.
+
+tag byte: 72
+
+Number of fields: 4 (3 before version 5.0)
+
+UnboundRelationship::Structure(
+id::Integer,
+type::String,
+properties::Dictionary,
+element_id::String,
+)
+
+Example of unbound relationship structure
+
+UnboundRelationship(
+id = 17,
+type = "KNOWS",
+properties = {"name": "example"},
+element_id = "foo"
+)
+
+B4 72
+...
+
+Path
+
+An alternating sequence of nodes and relationships.
+
+tag byte: 50
+
+Number of fields: 3
+
+Path::Structure(
+nodes::List<Node>,
+rels::List<UnboundRelationship>,
+indices::List<Integer>,
+)
+
+Where the nodes field contains a list of nodes and the rels field is a list of unbound relationships. The indices are a list of integers describing how to construct the path from nodes and rels. The first node in nodes is always the first node in the path and is not referenced in indices. indices always has an even number of entries. The 1st, 3rd, …​ entry in indices refers to an entry in rels (1-indexed), for example, a 3 would refer to the 3rd element of rels. The number can also be negative which should be treated like the positive equivalent, except for denoting the relationship in the inverse direction. The number is never 0. The 2nd, 4th, …​ entry in indices refers to an entry in nodes (0-indexed), for example, a 3 would refer to the 4th element of nodes. The number is always ≥ 0.
+Example (simplified notation for <Node> and <UnboundRelationship>)
+
+Path::Structure(
+nodes: [Node::Structure(42, ...), Node::Structure(69, ...), Node::Structure(1, ...)],
+rels: [UnboundRelationship::Structure(1000, ...), UnboundRelationship::Structure(1001, ...)],
+indices: [1, 1, 1, 0, -2, 2],
+
+This represents the path (42)-[1000]→(69)-[1000]→(42)←[1001]-(1), where (n) denotes a node with id n and [n] a relationship with id n (→ or ← denotes the direction of each relationship).
+Date
+
+A date without a time-zone in the ISO-8601 calendar system, e.g. 2007-12-03.
+
+tag byte: 44
+
+Number of fields: 1
+
+Date::Structure(
+days::Integer,
+)
+
+Where the days are days since Unix epoch. 0 for example represents 1970-01-01 while 1 represents 1970-01-02.
+Time
+
+An instant capturing the time of day, and the timezone, but not the date.
+
+tag byte: 54
+
+Number of fields: 2
+
+Time::Structure(
+nanoseconds::Integer,
+tz_offset_seconds::Integer,
+)
+
+Where the nanoseconds are nanoseconds since midnight (this time is not UTC) and the tz_offset_seconds are an offset in seconds from UTC.
+LocalTime
+
+An instant capturing the time of day, but neither the date nor the time zone.
+
+tag byte: 74
+
+Number of fields: 1
+
+LocalTime::Structure(
+nanoseconds::Integer,
+)
+
+Where the nanoseconds are nanoseconds since midnight.
+DateTime
+
+An instant capturing the date, the time, and the time zone. The time zone information is specified with a zone offset.
+
+This structure is new in version 5.0. It replaces Legacy DateTime and fixes a bug in certain edge-cases. Version 4.4 also allows for usage of the fixed structure, if server and client negotiate its usage (see HELLO message).
+
+tag byte: 49
+
+Number of fields: 3
+
+DateTime::Structure(
+seconds::Integer,
+nanoseconds::Integer,
+tz_offset_seconds::Integer,
+)
+
+The seconds and nanoseconds are the time since Unix epoch, often referred as a Unix timestamp.
+
+The amount of nanoseconds ranges from 0 to 999_999_999 (_ separator added here and later for clarity).
+
+The tz_offset_seconds specifies the offset in seconds from UTC.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+For instance, the serialization of the point in time denoted as 1970-01-01T02:15:00.000000042+01:00 can be implemented as follows:
+
+compute the UTC time, i.e. 1970-01-01T01:15:00.000000042Z (Z denotes UTC).
+
+compute the difference between that UTC time and the Unix epoch, which is 1h15, i.e. 4_500 seconds.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+The resulting DateTime instance is therefore as follows:
+
+{
+seconds: 4500
+nanoseconds: 42,
+tz_offset_seconds: 3600
+}
+
+The deserialization of such a DateTime structure expectedly happens in reverse:
+
+instantiate the idiomatic equivalent of DateTime based on that Unix timestamp (4500 seconds and 42 nanoseconds), giving 1970-01-01T01:15:00.000000042Z
+
+localize the resulting UTC DateTime to the timezone of the specified offset, giving 1970-01-01T02:15:00.000000042+0100
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+DateTimeZoneId
+
+An instant capturing the date, the time, and the time zone. The time zone information is specified with a zone identifier.
+
+This structure is new in version 5.0. It replaces Legacy DateTimeZoneId and fixes a bug in certain edge-cases. Version 4.4 also allows for usage of the fixed structure, if server and client negotiate its usage (see HELLO message).
+
+tag byte: 69
+
+Number of fields: 3
+
+DateTimeZoneId::Structure(
+seconds::Integer,
+nanoseconds::Integer,
+tz_id::String,
+)
+
+The seconds and nanoseconds are the time since Unix epoch, often referred as a Unix timestamp.
+
+The amount of nanoseconds ranges from 0 to 999_999_999 (_ separator added here and later for clarity).
+
+The tz_id specifies the timezone name as understood by the timezone database.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+For instance, the serialization of the point in time denoted as 1970-01-01T02:15:00.000000042+0100[Europe/Paris] can be implemented as follows:
+
+retrieve the offset of the named timezone for that point in time, here +1 hour, i.e. 3_600 seconds.
+
+compute the UTC time, i.e. 1970-01-01T01:15:00.000000042Z (Z denotes UTC).
+
+compute the difference between that UTC time and the Unix epoch, which is 1h15, i.e. 4_500 seconds.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+The resulting DateTime instance is therefore as follows:
+
+{
+seconds: 4500
+nanoseconds: 42,
+tz_id: "Europe/Paris"
+}
+
+The deserialization of such a DateTime structure happens in reverse:
+
+instantiate the idiomatic equivalent of DateTime based on that Unix timestamp (4500 seconds and 42 nanoseconds), giving 1970-01-01T01:15:00.000000042Z
+
+localize the resulting UTC DateTime to the timezone specified by tz_id, giving 1970-01-01T02:15:00.000000042+0100[Europe/Paris]
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Known Limitations
+Accuracy
+
+The resolution of offsets for a given time zone name and point in time is bound to the accuracy of the underlying timezone database. In particular, time zones before 1970 are not as well specified. Moreover, the offset resolution likely occurs both on the Bolt client side and Bolt server side. They each rely on a different timezone database. If these copies are not in sync, it could lead to unwanted discrepancies. In such a situation, either server or client could:
+
+reject a timezone name deemed valid by the other party.
+
+resolve different offsets for the same time zone and DateTimeZoneId.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+LocalDateTime
+
+An instant capturing the date and the time but not the time zone.
+
+tag byte: 64
+
+Number of fields: 2
+
+LocalDateTime::Structure(
+seconds::Integer,
+nanoseconds::Integer,
+)
+
+Where the seconds are seconds since the Unix epoch.
+Duration
+
+A temporal amount. This captures the difference in time between two instants. It only captures the amount of time between two instants, it does not capture a start time and end time. A unit capturing the start time and end time would be a Time Interval and is out of scope for this proposal.
+
+A duration can be negative.
+
+tag byte: 45
+
+Number of fields: 4
+
+Duration::Structure(
+months::Integer,
+days::Integer,
+seconds::Integer,
+nanoseconds::Integer,
+)
+
+Point2D
+
+A representation of a single location in 2-dimensional space.
+
+tag byte: 58
+
+Number of fields: 3
+
+Point2D::Structure(
+srid::Integer,
+x::Float,
+y::Float,
+)
+
+Where the srid is a Spatial Reference System Identifier.
+Point3D
+
+A representation of a single location in 3-dimensional space.
+
+tag byte: 59
+
+Number of fields: 4
+
+Point3D::Structure(
+srid::Integer,
+x::Float,
+y::Float,
+z::Float,
+)
+
+Where the srid is a Spatial Reference System Identifier.
+Legacy Structures
+Legacy DateTime
+
+An instant capturing the date, the time, and the time zone. The time zone information is specified with a zone offset.
+
+This structure got removed in version 5.0 in favor of DateTime.
+
+tag byte: 46
+
+Number of fields: 3
+
+DateTime::Structure(
+seconds::Integer,
+nanoseconds::Integer,
+tz_offset_seconds::Integer,
+)
+
+The tz_offset_seconds specifies the offset in seconds from UTC.
+
+The seconds elapsed since the Unix epoch, often referred as a Unix timestamp, added to the above offset.
+
+The nanoseconds are what remains after the last second of the DateTime. The amount of nanoseconds ranges from 0 to 999_999_999 (_ separator added here for clarity).
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+For instance, the serialization of the point in time denoted as 1970-01-01T02:15:00+01:00 (and 42 nanoseconds) can be implemented as follows:
+
+compute the UTC time, i.e. 1970-01-01T01:15:00Z (Z denotes UTC).
+
+compute the difference between that UTC time and the Unix epoch, which is 1h15, i.e. 4500 seconds.
+
+add the offset of +1 hour, i.e. 3600 seconds, to the above difference, which yields 8100 (4500 + 3600).
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+The resulting DateTime instance is therefore as follows:
+
+{
+seconds: 8100
+nanoseconds: 42,
+tz_offset_seconds: 3600
+}
+
+The deserialization of such a DateTime structure expectedly happens in reverse:
+
+remove the offset from the seconds field, which gives here 8100
+
+instantiate the idiomatic equivalent of DateTime based on that Unix timestamp, giving 1970-01-01T01:15:00Z
+
+localize the resulting UTC DateTime to the timezone of the specified offset, giving 1970-01-01T02:15:00+0100
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Legacy DateTimeZoneId
+
+An instant capturing the date, the time, and the time zone. The time zone information is specified with a zone identifier.
+
+This structure got removed in version 5.0 in favor of DateTimeZoneId.
+
+tag byte: 66
+
+Number of fields: 3
+
+DateTimeZoneId::Structure(
+seconds::Integer,
+nanoseconds::Integer,
+tz_id::String,
+)
+
+The tz_id specifies the timezone name as understood by the timezone database.
+
+The seconds elapsed since the Unix epoch, often referred as a Unix timestamp, added to the offset derived from the named timezone and specified the point in time.
+
+The nanoseconds are what remains after the last second of the DateTime. The amount of nanoseconds ranges from 0 to 999_999_999 (_ separator added here and later for clarity).
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+For instance, the serialization of the point in time denoted as 1970-01-01T02:15:00+0100[Europe/Paris] (and 42 nanoseconds) can be implemented as follows:
+
+retrieve the offset of the named timezone for that point in time, here +1 hour, i.e. 3600 seconds.
+
+compute the UTC time, i.e. 1970-01-01T01:15:00Z (Z denotes UTC).
+
+compute the difference between that UTC time and the Unix epoch, which is 1h15, i.e. 4500 seconds.
+
+add the resolved offset of +1 hour, i.e. 3600 seconds, to the above difference, which yields 8100 (4500 + 3600).
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+The resulting DateTime instance is therefore as follows:
+
+{
+seconds: 8100
+nanoseconds: 42,
+tz_id: "Europe/Paris"
+}
+
+The deserialization of such a DateTime structure happens as follows:
+
+instantiate the idiomatic equivalent of DateTime assuming the seconds denote a Unix timestamp, giving 1970-01-01T02:15:00Z.
+
+set the timezone of the resulting instance, without changing the date/time components, giving 1970-01-01T02:15:00+0100[Europe/Paris] (this may lead to ambiguities, refer to the Known Limitations section below for more information).
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Known Limitations
+Accuracy
+
+The resolution of offsets for a given time zone name and point in time is bound to the accuracy of the underlying timezone database. In particular, time zones before 1970 are not as well specified. Moreover, the offset resolution likely occurs both on the Bolt client side and Bolt server side. They each rely on a different timezone database. If these copies are not in sync, it could lead to unwanted discrepancies. In such a situation, either server or client could:
+
+reject a timezone name deemed valid by the other party.
+
+resolve different offsets for the same time zone and DateTimeZoneId.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Time Shifts
+
+Note: these issues have been resolved with the introduction of DateTimeZoneId in version 5.0.
+
+Not all instances of DateTimeZoneId map to a single valid point in time.
+
+During time shifts like going from 2AM to 3AM in a given day and timezone, 2:30AM e.g. does not happen.
+
+Similarly, when going from 3AM to 2AM in a given day and timezone, 2:30AM happens twice.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+In the first case, a DateTimeZoneId specifying a time between 2AM and 3AM does not correspond to any actual points in time for that timezone and is invalid.
+
+In the second case, all points in the time between 2AM and 3AM exist twice, but with a different offset. Therefore, the timezone name is not sufficient to resolve the ambiguity, the timezone offset is also needed. Since DateTimeZoneId does not include the timezone offset, the resolution of these particular datetimes is undefined behavior.
+Summary of changes per version
+
+The sections below list the changes of structure semantics in versions where they changed. Please also check for changes in Bolt Messages.
+Version 5.0
+
+The element_id field was added to Node.
+
+The fields element_id, start_node_element_id, and end_node_element_id were added to Relationship.
+
+The element_id field was added to UnboundRelationship.
+
+Replaced Legacy DateTime and Legacy DateTimeZoneId with DateTime and DateTimeZoneId respectively.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Bolt Protocol server state specification
+
+For the server, each connection using the Bolt Protocol will occupy one of several states throughout its lifetime.
+
+This state is used to determine what actions may be undertaken by the client. Each server state specification corresponds to a message specification with the same version.
+
+For a summary of all available server state transitions in each version of the Bolt Protocol, see the Appendix pages.
+Server states
+
+Each connection maintained by a Bolt server will occupy one of several states throughout its lifetime. This state is used to determine what actions may be undertaken by the client.
+State 	Logic state 	Description
+
+DISCONNECTED
+
+X
+
+no socket connection
+
+DEFUNCT
+
+X
+
+the socket connection is permanently closed
+
+NEGOTIATION
+
+protocol handshake is completed successfully; ready to accept a HELLO message
+
+AUTHENTICATION
+
+HELLO or LOGOFF message accepted; ready to accept a LOGON message
+
+READY
+
+ready to accept a RUN message
+
+STREAMING
+
+Auto-commit Transaction, a result is available for streaming from the server
+
+TX_READY
+
+Explicit Transaction, ready to accept a RUN message
+
+TX_STREAMING
+
+Explicit Transaction, a result is available for streaming from the server
+
+FAILED
+
+a connection is in a temporarily unusable state
+
+INTERRUPTED
+
+the server got an <INTERRUPT> signal
+Server state DISCONNECTED
+
+No socket connection has yet been established. This is the initial state and exists only in a logical sense prior to the socket being opened.
+Transitions from DISCONNECTED
+
+Bolt handshake completed successfully to NEGOTIATION
+
+Bolt handshake did not complete successfully to DEFUNCT
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Server state NEGOTIATION
+
+After a new protocol connection has been established and handshake has been completed successfully, the server enters the NEGOTIATION state. The connection has not yet been authenticated and permits only one transition, through successful initialization using the HELLO message, into the AUTHENTICATION state.
+Transitions from NEGOTIATION
+
+<DISCONNECT> to DEFUNCT
+
+HELLO to AUTHENTICATION or DEFUNCT
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Server state AUTHENTICATION
+
+Connection has been established and metadata has been sent back from the HELLO message or a LOGOFF message was received whilst in ready state. Ready to accept a LOGON message with authentication information.
+Transitions from NEGOTIATION
+
+LOGON to READY or DEFUNCT
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Transitions from READY
+
+LOGOFF to AUTHENTICATION
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Server state DEFUNCT
+
+This is not strictly a connection state, but is instead a logical state that exists after a connection has been closed. When DEFUNCT, a connection is permanently not usable. This may arise due to a graceful shutdown or can occur after an unrecoverable error or protocol violation. Clients and servers should clear up any resources associated with a connection on entering this state, including closing any open sockets. This is a terminal state on which no further transitions may be carried out. The <DISCONNECT> signal will set the connection in the DEFUNCT server state.
+Server state READY
+
+The READY state can handle the request messages RUN and BEGIN and receive a query.
+Transitions from READY
+
+<INTERRUPT> to INTERRUPTED
+
+<DISCONNECT> to DEFUNCT
+
+RUN to STREAMING or FAILED
+
+BEGIN to TX_READY or FAILED (v3+)
+
+LOGOFF to AUTHENTICATION (v5.1+)
+
+TELEMETRY to READY (v5.4+)
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Server state STREAMING
+
+When STREAMING, a result is available for streaming from server to client. This result must be fully consumed or discarded by a client before the server can re-enter the READY state and allow any further queries to be executed.
+Transitions from STREAMING
+
+<INTERRUPT> to INTERRUPTED
+
+<DISCONNECT> to DEFUNCT
+
+PULL to READY, FAILED, or STREAMING
+
+DISCARD to READY, FAILED, or STREAMING
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+In v1, v2 and v3, the following transitions are possible:
+
+<INTERRUPT> to INTERRUPTED
+
+<DISCONNECT> to DEFUNCT
+
+PULL_ALL to READY or FAILED
+
+DISCARD_ALL to READY or FAILED
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Table 1. Request message DISCARD state transitions State 	New state 	Response
+
+STREAMING
+
+READY
+
+SUCCESS {"has_more": false} or SUCCESS {}
+
+STREAMING
+
+FAILED
+
+FAILURE {}
+
+STREAMING
+
+STREAMING
+
+SUCCESS {"has_more": true}
+Table 2. Request message PULL state transitions State 	New state 	Response
+
+STREAMING
+
+READY
+
+[RECORD …] SUCCESS {"has_more": false} or SUCCESS {}
+
+STREAMING
+
+FAILED
+
+[RECORD …] FAILURE {}
+
+STREAMING
+
+STREAMING
+
+[RECORD …] SUCCESS {"has_more": true}
+Table 3. Request message DISCARD_ALL state transitions in v1, v2, and v3 only State 	New state 	Response
+
+STREAMING
+
+READY
+
+`SUCCESS {}
+
+STREAMING
+
+FAILED
+
+FAILURE {}
+Table 4. Request message PULL_ALL state transitions in v1. v2 and v3 only State 	New state 	Response
+
+STREAMING
+
+READY
+
+[RECORD …] SUCCESS {}
+
+STREAMING
+
+FAILED
+
+[RECORD …] FAILURE {}
+Server state TX_READY
+Transitions from TX_READY
+
+<INTERRUPT> to INTERRUPTED
+
+<DISCONNECT> to DEFUNCT
+
+RUN to TX_STREAMING or FAILED
+
+COMMIT to READY or FAILED
+
+ROLLBACK to READY or FAILED
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Table 5. Request message RUN state transitions State 	New state 	Response
+
+TX_READY
+
+TX_STREAMING
+
+SUCCESS {"qid": id::Integer}
+
+TX_READY
+
+FAILED
+
+FAILURE{}
+
+The TX_READY server state does not exist in v1 or v2.
+Server state TX_STREAMING
+
+When TX_STREAMING, a result is available for streaming from server to client. This result must be fully consumed or discarded by a client before the server can transition to the TX_READY state.
+Transitions from TX_STREAMING
+
+<INTERRUPT> to INTERRUPTED
+
+<DISCONNECT> to DEFUNCT
+
+RUN to TX_STREAMING or FAILED
+
+PULL to TX_READY, FAILED or TX_STREAMING
+
+DISCARD to TX_READY, FAILED or TX_STREAMING
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Table 6. Request message RUN state transitions State 	New state 	Response
+
+TX_STREAMING
+
+TX_STREAMING
+
+SUCCESS {"qid": id::Integer}
+
+TX_STREAMING
+
+FAILED
+
+FAILURE{}
+Table 7. Request message DISCARD state transitions State 	New state 	Response
+
+TX_STREAMING
+
+TX_READY or TX_STREAMING if there are other streams open
+
+SUCCESS {"has_more": false} or SUCCESS {}
+
+TX_STREAMING
+
+FAILED
+
+FAILURE {}
+
+TX_STREAMING
+
+TX_STREAMING
+
+SUCCESS {"has_more": true}
+Table 8. Request messages PULL state transitions State 	New state 	Response
+
+TX_STREAMING
+
+TX_READY or TX_STREAMING if there are other streams open
+
+[RECORD …] SUCCESS {"has_more": false} or SUCCESS {}
+
+TX_STREAMING
+
+FAILED
+
+[RECORD …] FAILURE {}
+
+TX_STREAMING
+
+TX_STREAMING
+
+[RECORD …] SUCCESS {"has_more": true}
+
+The TX_STREAMING server state does not exist in v1 or v2.
+Server state FAILED
+
+When FAILED, a connection is in a temporarily unusable state. This is generally as the result of encountering a recoverable error. This mode ensures that only one failure can exist at a time, preventing cascading issues from batches of work.
+Transitions from FAILED
+
+<INTERRUPT> to INTERRUPTED
+
+<DISCONNECT> to DEFUNCT
+
+RUN to FAILED
+
+PULL to FAILED
+
+DISCARD to FAILED
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+In v1 and v2, in a FAILED state, no more work will be processed until the failure has been acknowledged by ACK_FAILURE or until the connection has been RESET.
+
+In v1 and v2, the following transitions are possible:
+
+<INTERRUPT> to INTERRUPTED
+
+<DISCONNECT> to DEFUNCT
+
+ACK_FAILURE to READY or DEFUNCT
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Server state INTERRUPTED
+
+This state occurs between the server receiving the jump-ahead <INTERRUPT> and the queued RESET message, (the RESET message triggers an <INTERRUPT>). Most incoming messages are ignored when the server are in an INTERRUPTED state, with the exception of the RESET that allows transition back to READY. The <INTERRUPT> signal will set the connection in the INTERRUPTED server state.
+Transitions from INTERRUPTED
+
+<INTERRUPT> to INTERRUPTED
+
+<DISCONNECT> to DEFUNCT
+
+RUN to INTERRUPTED
+
+DISCARD to INTERRUPTED
+
+PULL to INTERRUPTED
+
+BEGIN to INTERRUPTED
+
+COMMIT to INTERRUPTED
+
+ROLLBACK to INTERRUPTED
+
+RESET to READY or DEFUNCT
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+In v1 and v2, the following transitions are possible:
+
+<INTERRUPT> to INTERRUPTED
+
+<DISCONNECT> to DEFUNCT
+
+RUN to INTERRUPTED
+
+DISCARD_ALL to INTERRUPTED
+
+PULL_ALL to INTERRUPTED
+
+ACK_FAILURE to INTERRUPTED
+
+RESET to READY or DEFUNCT
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Summary of changes per version
+
+The sections below list the changes compared to the previous version.
+Version 5.2
+
+No changes compared to version 5.1.
+Version 5.1
+
+CONNECTED state has been renamed to NEGOTIATION but still accepts the HELLO message.
+
+HELLO message no longer accepts authentication and transitions to the AUTHENTICATION state from NEGOTIATION.
+
+LOGON message has been added. It can only be received in the AUTHENTICATION state and transitions to the READY state.
+
+LOGOFF message has be added. It can only be received in the READY state and transitions to the AUTHENTICATION state.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Version 5.0
+
+No changes compared to version 4.4.
+Version 4.4
+
+No changes compared to version 4.3.
+Version 4.3
+
+The ROUTE message was added. It can only be received in the READY state and causes no transition.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Version 4.2
+
+No changes compared to version 4.1.
+Version 4.1
+
+No changes compared to version 4.0.
+Version 4.0
+
+Compared to version 3 the RUN, PULL and DISCARD now can re-enter STREAMING or TX_STREAMING. The server state transitions are using the updated set of messages defined in Bolt Protocol Message Specification Version 4.0.
+Version 3
+
+Compared to version 2 there are new server states:
+
+TX_READY
+
+TX_STREAMING These states are introduced to handle the concept of Explicit Transaction. The server state transitions are using the updated set of messages defined in Bolt Protocol Message Specification Version 3.
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+IGNORE_WHEN_COPYING_END
+
+Version 2
+
+No changes compared to version 1.
+
+这是完整的bolt协议文档，你看看现有代码还有哪些问题，还有哪些待实现
