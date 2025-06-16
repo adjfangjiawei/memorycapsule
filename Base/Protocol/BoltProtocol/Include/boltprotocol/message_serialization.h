@@ -6,13 +6,9 @@
 #include <string>
 #include <vector>
 
-#include "boltprotocol/message_defs.h"  // For message parameter structs, Value, BoltError, MessageTag
+#include "boltprotocol/message_defs.h"
 #include "boltprotocol/packstream_reader.h"
 #include "boltprotocol/packstream_writer.h"
-
-// Forward declare the Version struct if only passed by const ref and not constructed here.
-// However, serialize_route_message takes it, so message_defs.h (which defines it) is fine.
-// namespace boltprotocol { namespace versions { struct Version; } }
 
 namespace boltprotocol {
 
@@ -26,14 +22,13 @@ namespace boltprotocol {
     BoltError serialize_reset_message(PackStreamWriter& writer);
 
     // Transaction messages
-    BoltError serialize_begin_message(const BeginMessageParams& params, PackStreamWriter& writer);  // ADDED DECLARATION
-    BoltError serialize_commit_message(PackStreamWriter& writer);                                   // ADDED DECLARATION
-    BoltError serialize_rollback_message(PackStreamWriter& writer);                                 // ADDED DECLARATION
+    BoltError serialize_begin_message(const BeginMessageParams& params, PackStreamWriter& writer);
+    BoltError serialize_commit_message(PackStreamWriter& writer);
+    BoltError serialize_rollback_message(PackStreamWriter& writer);
 
     // Routing and Telemetry messages
-    // Note: serialize_route_message takes the negotiated Bolt version to adapt its structure.
-    BoltError serialize_route_message(const RouteMessageParams& params, PackStreamWriter& writer, const versions::Version& negotiated_bolt_version);  // ADDED DECLARATION
-    // TODO: BoltError serialize_telemetry_message(const TelemetryMessageParams& params, PackStreamWriter& writer);
+    BoltError serialize_route_message(const RouteMessageParams& params, PackStreamWriter& writer, const versions::Version& negotiated_bolt_version);
+    BoltError serialize_telemetry_message(const TelemetryMessageParams& params, PackStreamWriter& writer);  // <--- ADDED DECLARATION
 
     // --- Server Message Deserialization (Server -> Client) ---
 
@@ -41,6 +36,8 @@ namespace boltprotocol {
     BoltError deserialize_failure_message(PackStreamReader& reader, FailureMessageParams& out_params);
     BoltError deserialize_record_message(PackStreamReader& reader, RecordMessageParams& out_params);
     BoltError deserialize_ignored_message(PackStreamReader& reader);
+
+    BoltError deserialize_message_structure_prelude(PackStreamReader& reader, MessageTag expected_tag, size_t expected_fields_min, size_t expected_fields_max, PackStreamStructure& out_structure_contents);
 
     BoltError peek_message_structure_header(PackStreamReader& reader, uint8_t& out_tag, uint32_t& out_fields_count);
 
