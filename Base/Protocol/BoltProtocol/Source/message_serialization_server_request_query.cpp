@@ -12,15 +12,13 @@
 
 namespace boltprotocol {
 
-    // Anonymous namespace for internal linkage helper functions
     namespace {
-        // ... (get_optional_string_from_map, get_optional_list_string_from_map, get_optional_map_from_map, get_optional_int64_from_map helpers remain here) ...
         std::optional<std::string> get_optional_string_from_map(const BoltMap& map, const std::string& key) {
             auto it = map.pairs.find(key);
             if (it != map.pairs.end() && std::holds_alternative<std::string>(it->second)) {
                 try {
                     return std::get<std::string>(it->second);
-                } catch (...) { /* Should not happen with holds_alternative */
+                } catch (...) {
                 }
             }
             return std::nullopt;
@@ -58,7 +56,7 @@ namespace boltprotocol {
                 if (inner_map_sptr) {
                     try {
                         return inner_map_sptr->pairs;
-                    } catch (...) { /* map copy failed */
+                    } catch (...) {
                     }
                 }
             }
@@ -69,15 +67,14 @@ namespace boltprotocol {
             if (it != map.pairs.end() && std::holds_alternative<int64_t>(it->second)) {
                 try {
                     return std::get<int64_t>(it->second);
-                } catch (...) { /* Should not happen */
+                } catch (...) {
                 }
             }
             return std::nullopt;
         }
-    }  // anonymous namespace
+    }  // namespace
 
     BoltError deserialize_run_message_request(PackStreamReader& reader, RunMessageParams& out_params, const versions::Version& server_negotiated_version) {
-        // ... (implementation remains the same as previous version) ...
         if (reader.has_error()) return reader.get_error();
         out_params = {};
 
@@ -85,7 +82,11 @@ namespace boltprotocol {
         BoltError err = deserialize_message_structure_prelude(reader, MessageTag::RUN, 3, 3, run_struct_contents);
         if (err != BoltError::SUCCESS) return err;
 
-        if (run_struct_contents.fields.size() < 1 || !std::holds_alternative<std::string>(run_struct_contents.fields[0])) {
+        if (run_struct_contents.fields.size() < 3) {  // Defensive, prelude should catch this
+            reader.set_error(BoltError::INVALID_MESSAGE_FORMAT);
+            return BoltError::INVALID_MESSAGE_FORMAT;
+        }
+        if (!std::holds_alternative<std::string>(run_struct_contents.fields[0])) {
             reader.set_error(BoltError::INVALID_MESSAGE_FORMAT);
             return BoltError::INVALID_MESSAGE_FORMAT;
         }
@@ -96,7 +97,7 @@ namespace boltprotocol {
             return BoltError::UNKNOWN_ERROR;
         }
 
-        if (run_struct_contents.fields.size() < 2 || !std::holds_alternative<std::shared_ptr<BoltMap>>(run_struct_contents.fields[1])) {
+        if (!std::holds_alternative<std::shared_ptr<BoltMap>>(run_struct_contents.fields[1])) {
             reader.set_error(BoltError::INVALID_MESSAGE_FORMAT);
             return BoltError::INVALID_MESSAGE_FORMAT;
         }
@@ -112,7 +113,7 @@ namespace boltprotocol {
             return BoltError::UNKNOWN_ERROR;
         }
 
-        if (run_struct_contents.fields.size() < 3 || !std::holds_alternative<std::shared_ptr<BoltMap>>(run_struct_contents.fields[2])) {
+        if (!std::holds_alternative<std::shared_ptr<BoltMap>>(run_struct_contents.fields[2])) {
             reader.set_error(BoltError::INVALID_MESSAGE_FORMAT);
             return BoltError::INVALID_MESSAGE_FORMAT;
         }
@@ -154,81 +155,75 @@ namespace boltprotocol {
         return BoltError::SUCCESS;
     }
 
-    BoltError deserialize_pull_message_request(PackStreamReader& reader, PullMessageParams& out_params) {
+    BoltError deserialize_pull_message_request(PackStreamReader& reader, PullMessageParams& out_params, const versions::Version& server_negotiated_version) {
         if (reader.has_error()) return reader.get_error();
         out_params.n = std::nullopt;
         out_params.qid = std::nullopt;
 
         PackStreamStructure pull_struct_contents;
-        // PULL PSS has 1 field: an 'extra' map containing 'n' and 'qid' (for Bolt 4.0+)
-        // For Bolt < 4.0 (PULL_ALL), it had 0 fields.
-        // We need to know the version to decide expected fields.
-        // For simplicity, assuming modern PULL (Bolt 4.0+) which has the extra map.
-        // If older versions need to be supported, this logic needs branching.
-        // For now, we assume it *always* has the extra map field.
-        BoltError err = deserialize_message_structure_prelude(reader, MessageTag::PULL, 1, 1, pull_struct_contents);
-        if (err != BoltError::SUCCESS) {
-            return err;
+        BoltError err;
+
+        if (server_negotiated_version.major >= 4) {  // Bolt 4.0+ PULL has 1 field (extra map)
+            err = deserialize_message_structure_prelude(reader, MessageTag::PULL, 1, 1, pull_struct_contents);
+            if (err != BoltError::SUCCESS) return err;
+
+            if (pull_struct_contents.fields.empty() || !std::holds_alternative<std::shared_ptr<BoltMap>>(pull_struct_contents.fields[0])) {
+                reader.set_error(BoltError::INVALID_MESSAGE_FORMAT);
+                return BoltError::INVALID_MESSAGE_FORMAT;
+            }
+            auto extra_map_sptr = std::get<std::shared_ptr<BoltMap>>(std::move(pull_struct_contents.fields[0]));
+            if (!extra_map_sptr) {
+                reader.set_error(BoltError::INVALID_MESSAGE_FORMAT);
+                return BoltError::INVALID_MESSAGE_FORMAT;
+            }
+            out_params.n = get_optional_int64_from_map(*extra_map_sptr, "n");
+            out_params.qid = get_optional_int64_from_map(*extra_map_sptr, "qid");
+            if (!out_params.n.has_value()) {  // 'n' is mandatory in Bolt 4.0+ PULL
+                reader.set_error(BoltError::INVALID_MESSAGE_FORMAT);
+                // return BoltError::INVALID_MESSAGE_FORMAT; // Be strict or allow for now?
+            }
+        } else {  // Bolt < 4.0 (PULL_ALL) has 0 fields
+            err = deserialize_message_structure_prelude(reader, MessageTag::PULL, 0, 0, pull_struct_contents);
+            if (err != BoltError::SUCCESS) return err;
+            // For PULL_ALL, n is implicitly -1 (all), qid is implicitly -1 (last query)
+            out_params.n = -1;
+            out_params.qid = -1;
         }
-
-        if (pull_struct_contents.fields.empty() || !std::holds_alternative<std::shared_ptr<BoltMap>>(pull_struct_contents.fields[0])) {
-            reader.set_error(BoltError::INVALID_MESSAGE_FORMAT);
-            return BoltError::INVALID_MESSAGE_FORMAT;
-        }
-
-        auto extra_map_sptr = std::get<std::shared_ptr<BoltMap>>(std::move(pull_struct_contents.fields[0]));
-        if (!extra_map_sptr) {
-            reader.set_error(BoltError::INVALID_MESSAGE_FORMAT);  // Map field was null
-            return BoltError::INVALID_MESSAGE_FORMAT;
-        }
-
-        out_params.n = get_optional_int64_from_map(*extra_map_sptr, "n");
-        out_params.qid = get_optional_int64_from_map(*extra_map_sptr, "qid");
-
-        // According to spec, 'n' is mandatory for PULL (Bolt 4.0+). 'qid' defaults to -1.
-        if (!out_params.n.has_value()) {
-            // Server might treat this as an error depending on strictness and version.
-            // For Bolt 4.0+, "n" must be present.
-            // reader.set_error(BoltError::INVALID_MESSAGE_FORMAT);
-            // return BoltError::INVALID_MESSAGE_FORMAT;
-            // For now, allow it to be missing from map, caller can check optional.
-        }
-
         return BoltError::SUCCESS;
     }
 
-    BoltError deserialize_discard_message_request(PackStreamReader& reader, DiscardMessageParams& out_params) {
+    BoltError deserialize_discard_message_request(PackStreamReader& reader, DiscardMessageParams& out_params, const versions::Version& server_negotiated_version) {
         if (reader.has_error()) return reader.get_error();
         out_params.n = std::nullopt;
         out_params.qid = std::nullopt;
 
         PackStreamStructure discard_struct_contents;
-        // DISCARD PSS has 1 field: an 'extra' map containing 'n' and 'qid' (for Bolt 4.0+)
-        // For Bolt < 4.0 (DISCARD_ALL), it had 0 fields.
-        // Similar to PULL, assuming modern DISCARD for now.
-        BoltError err = deserialize_message_structure_prelude(reader, MessageTag::DISCARD, 1, 1, discard_struct_contents);
-        if (err != BoltError::SUCCESS) {
-            return err;
-        }
+        BoltError err;
 
-        if (discard_struct_contents.fields.empty() || !std::holds_alternative<std::shared_ptr<BoltMap>>(discard_struct_contents.fields[0])) {
-            reader.set_error(BoltError::INVALID_MESSAGE_FORMAT);
-            return BoltError::INVALID_MESSAGE_FORMAT;
-        }
+        if (server_negotiated_version.major >= 4) {  // Bolt 4.0+ DISCARD has 1 field (extra map)
+            err = deserialize_message_structure_prelude(reader, MessageTag::DISCARD, 1, 1, discard_struct_contents);
+            if (err != BoltError::SUCCESS) return err;
 
-        auto extra_map_sptr = std::get<std::shared_ptr<BoltMap>>(std::move(discard_struct_contents.fields[0]));
-        if (!extra_map_sptr) {
-            reader.set_error(BoltError::INVALID_MESSAGE_FORMAT);
-            return BoltError::INVALID_MESSAGE_FORMAT;
-        }
-
-        out_params.n = get_optional_int64_from_map(*extra_map_sptr, "n");
-        out_params.qid = get_optional_int64_from_map(*extra_map_sptr, "qid");
-
-        if (!out_params.n.has_value()) {
-            // "n" is mandatory for DISCARD (Bolt 4.0+)
-            // reader.set_error(BoltError::INVALID_MESSAGE_FORMAT);
-            // return BoltError::INVALID_MESSAGE_FORMAT;
+            if (discard_struct_contents.fields.empty() || !std::holds_alternative<std::shared_ptr<BoltMap>>(discard_struct_contents.fields[0])) {
+                reader.set_error(BoltError::INVALID_MESSAGE_FORMAT);
+                return BoltError::INVALID_MESSAGE_FORMAT;
+            }
+            auto extra_map_sptr = std::get<std::shared_ptr<BoltMap>>(std::move(discard_struct_contents.fields[0]));
+            if (!extra_map_sptr) {
+                reader.set_error(BoltError::INVALID_MESSAGE_FORMAT);
+                return BoltError::INVALID_MESSAGE_FORMAT;
+            }
+            out_params.n = get_optional_int64_from_map(*extra_map_sptr, "n");
+            out_params.qid = get_optional_int64_from_map(*extra_map_sptr, "qid");
+            if (!out_params.n.has_value()) {  // 'n' is mandatory in Bolt 4.0+ DISCARD
+                reader.set_error(BoltError::INVALID_MESSAGE_FORMAT);
+                // return BoltError::INVALID_MESSAGE_FORMAT;
+            }
+        } else {  // Bolt < 4.0 (DISCARD_ALL) has 0 fields
+            err = deserialize_message_structure_prelude(reader, MessageTag::DISCARD, 0, 0, discard_struct_contents);
+            if (err != BoltError::SUCCESS) return err;
+            out_params.n = -1;
+            out_params.qid = -1;
         }
         return BoltError::SUCCESS;
     }

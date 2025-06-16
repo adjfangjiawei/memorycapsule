@@ -12,7 +12,7 @@ namespace boltprotocol {
         auto months_opt = detail::get_typed_field<int64_t>(pss.fields, 0);
         auto days_opt = detail::get_typed_field<int64_t>(pss.fields, 1);
         auto seconds_opt = detail::get_typed_field<int64_t>(pss.fields, 2);
-        auto nanos_opt = detail::get_typed_field<int64_t>(pss.fields, 3);  // Stored as int64_t in Value
+        auto nanos_opt = detail::get_typed_field<int64_t>(pss.fields, 3);
 
         if (!months_opt || !days_opt || !seconds_opt || !nanos_opt) return BoltError::INVALID_MESSAGE_FORMAT;
 

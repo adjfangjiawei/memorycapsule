@@ -7,15 +7,13 @@
 #include <vector>
 
 #include "boltprotocol/message_defs.h"
-#include "boltprotocol/message_serialization.h"
+#include "boltprotocol/message_serialization.h"  // For deserialize_message_structure_prelude
 #include "boltprotocol/packstream_reader.h"
 
 namespace boltprotocol {
 
-    // Anonymous namespace for internal linkage helper functions
     namespace {
-        // ... (get_optional_string_from_map, get_optional_list_string_from_map, get_optional_map_from_map, get_optional_int64_from_map helpers remain here) ...
-        std::optional<std::string> get_optional_string_from_map(const BoltMap& map, const std::string& key) { /* ... */
+        std::optional<std::string> get_optional_string_from_map(const BoltMap& map, const std::string& key) {
             auto it = map.pairs.find(key);
             if (it != map.pairs.end() && std::holds_alternative<std::string>(it->second)) {
                 try {
@@ -25,7 +23,7 @@ namespace boltprotocol {
             }
             return std::nullopt;
         }
-        std::optional<std::vector<std::string>> get_optional_list_string_from_map(const BoltMap& map, const std::string& key) { /* ... */
+        std::optional<std::vector<std::string>> get_optional_list_string_from_map(const BoltMap& map, const std::string& key) {
             auto it = map.pairs.find(key);
             if (it != map.pairs.end() && std::holds_alternative<std::shared_ptr<BoltList>>(it->second)) {
                 auto list_sptr = std::get<std::shared_ptr<BoltList>>(it->second);
@@ -51,7 +49,7 @@ namespace boltprotocol {
             }
             return std::nullopt;
         }
-        std::optional<std::map<std::string, Value>> get_optional_map_from_map(const BoltMap& map, const std::string& key) { /* ... */
+        std::optional<std::map<std::string, Value>> get_optional_map_from_map(const BoltMap& map, const std::string& key) {
             auto it = map.pairs.find(key);
             if (it != map.pairs.end() && std::holds_alternative<std::shared_ptr<BoltMap>>(it->second)) {
                 auto inner_map_sptr = std::get<std::shared_ptr<BoltMap>>(it->second);
@@ -64,7 +62,7 @@ namespace boltprotocol {
             }
             return std::nullopt;
         }
-        std::optional<int64_t> get_optional_int64_from_map(const BoltMap& map, const std::string& key) { /* ... */
+        std::optional<int64_t> get_optional_int64_from_map(const BoltMap& map, const std::string& key) {
             auto it = map.pairs.find(key);
             if (it != map.pairs.end() && std::holds_alternative<int64_t>(it->second)) {
                 try {
@@ -74,10 +72,9 @@ namespace boltprotocol {
             }
             return std::nullopt;
         }
-    }  // anonymous namespace
+    }  // namespace
 
     BoltError deserialize_begin_message_request(PackStreamReader& reader, BeginMessageParams& out_params, const versions::Version& server_negotiated_version) {
-        // ... (implementation remains the same as previous version) ...
         if (reader.has_error()) return reader.get_error();
         out_params = {};
 
@@ -124,26 +121,32 @@ namespace boltprotocol {
 
     BoltError deserialize_commit_message_request(PackStreamReader& reader) {
         if (reader.has_error()) return reader.get_error();
-        // CommitMessageParams is empty.
+        // CommitMessageParams is empty struct, no out_params needed.
 
         PackStreamStructure commit_struct_contents;
-        // COMMIT PSS has 1 field: an empty map {}.
+        // COMMIT PSS (Bolt 3+) has 1 field: an empty map {}.
         BoltError err = deserialize_message_structure_prelude(reader, MessageTag::COMMIT, 1, 1, commit_struct_contents);
         if (err != BoltError::SUCCESS) {
             return err;
         }
-        // Validate the field is indeed an empty map (or at least a map)
+
+        // Validate the field is indeed a map (preferably empty).
         if (commit_struct_contents.fields.empty() || !std::holds_alternative<std::shared_ptr<BoltMap>>(commit_struct_contents.fields[0])) {
             reader.set_error(BoltError::INVALID_MESSAGE_FORMAT);
             return BoltError::INVALID_MESSAGE_FORMAT;
         }
         auto map_sptr = std::get<std::shared_ptr<BoltMap>>(commit_struct_contents.fields[0]);
-        if (!map_sptr) {  // Should be a non-null pointer to a (possibly empty) map
-            reader.set_error(BoltError::INVALID_MESSAGE_FORMAT);
+        if (!map_sptr) {
+            reader.set_error(BoltError::INVALID_MESSAGE_FORMAT);  // Map field was a null shared_ptr
             return BoltError::INVALID_MESSAGE_FORMAT;
         }
-        // Optionally, check if map_sptr->pairs is empty if strictness is required.
-        // For now, just ensuring it's a map is sufficient for the structure.
+        // Specification: "Fields: No fields." but the PackStream structure for COMMIT is `COMMIT {}`
+        // This means the PSS has one field, which is an empty map.
+        // We can optionally check if map_sptr->pairs is empty for stricter validation.
+        // if (!map_sptr->pairs.empty()) {
+        //     reader.set_error(BoltError::INVALID_MESSAGE_FORMAT); // Expected empty map
+        //     return BoltError::INVALID_MESSAGE_FORMAT;
+        // }
         return BoltError::SUCCESS;
     }
 
@@ -152,12 +155,12 @@ namespace boltprotocol {
         // RollbackMessageParams is empty.
 
         PackStreamStructure rollback_struct_contents;
-        // ROLLBACK PSS has 1 field: an empty map {}.
+        // ROLLBACK PSS (Bolt 3+) has 1 field: an empty map {}.
         BoltError err = deserialize_message_structure_prelude(reader, MessageTag::ROLLBACK, 1, 1, rollback_struct_contents);
         if (err != BoltError::SUCCESS) {
             return err;
         }
-        // Validate the field is indeed an empty map (or at least a map)
+        // Validate the field.
         if (rollback_struct_contents.fields.empty() || !std::holds_alternative<std::shared_ptr<BoltMap>>(rollback_struct_contents.fields[0])) {
             reader.set_error(BoltError::INVALID_MESSAGE_FORMAT);
             return BoltError::INVALID_MESSAGE_FORMAT;
@@ -167,6 +170,7 @@ namespace boltprotocol {
             reader.set_error(BoltError::INVALID_MESSAGE_FORMAT);
             return BoltError::INVALID_MESSAGE_FORMAT;
         }
+        // The map should be empty.
         return BoltError::SUCCESS;
     }
 

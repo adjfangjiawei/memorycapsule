@@ -9,7 +9,7 @@ namespace boltprotocol {
         if (pss.tag != 0x58) return BoltError::INVALID_MESSAGE_FORMAT;  // 'X'
         if (pss.fields.size() != 3) return BoltError::INVALID_MESSAGE_FORMAT;
 
-        auto srid_opt = detail::get_typed_field<int64_t>(pss.fields, 0);  // Spec: Integer, fits uint32
+        auto srid_opt = detail::get_typed_field<int64_t>(pss.fields, 0);
         auto x_opt = detail::get_typed_field<double>(pss.fields, 1);
         auto y_opt = detail::get_typed_field<double>(pss.fields, 2);
 
