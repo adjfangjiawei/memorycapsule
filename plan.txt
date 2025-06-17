@@ -1,0 +1,64 @@
+Base/
+├── CMakeLists.txt
+├── CppOrm/                     # ORM 模块 (保持不变)
+│   └── ...
+├── DataBaseDriver/
+│   ├── CMakeLists.txt
+│   └── Neo4jDriver/            # <--- 重命名/新建: 作为统一的驱动接口和工厂模块
+│       ├── CMakeLists.txt
+│       ├── Include/
+│       │   └── neo4j_driver/
+│       │       ├── i_neo4j_driver.h      # 核心驱动接口 (定义如 connect, executeQuery, beginTx 等)
+│       │       ├── i_neo4j_connection.h  # 核心连接接口 (由 i_neo4j_driver 创建和管理)
+│       │       ├── i_neo4j_result.h      # 核心结果集接口
+│       │       ├── i_neo4j_transaction.h # 核心事务接口
+│       │       ├── config.h              # 通用驱动配置 (服务器地址, 认证等)
+│       │       ├── error.h               # 通用驱动错误码/异常
+│       │       └── driver_factory.h      # (可选) 创建具体驱动实例的工厂
+│       └── Source/
+│           ├── config.cpp
+│           ├── error.cpp
+│           └── driver_factory.cpp
+├── Protocol/
+│   ├── CMakeLists.txt
+│   ├── BoltProtocol/             # 底层 Bolt 协议编解码库 (我们一直在完善的)
+│   │   └── ... (保持不变)
+│   └── Neo4jHttpPayloads/        # <--- 新增: 针对 Neo4j HTTP API 的 "协议层"
+│       ├── CMakeLists.txt        # 负责构建和解析 Neo4j HTTP API 的 JSON payloads
+│       ├── Include/
+│       │   └── neo4j_http_payloads/
+│       │       ├── request_builder.h   # 构建 Cypher, 事务等请求的 JSON body
+│       │       ├── response_parser.h   # 解析 HTTP API 返回的 JSON (结果, 错误等)
+│       │       ├── transaction_payloads.h # begin, commit, rollback 的 payload 结构
+│       │       └── cypher_payloads.h      # cypher 执行的 payload 结构
+│       └── Source/
+│           ├── request_builder.cpp
+│           └── response_parser.cpp
+└── Transport/                    # <--- 新增: 传输层实现模块
+    ├── CMakeLists.txt
+    ├── Neo4jBoltTransport/       # <--- Bolt 协议的具体传输实现
+    │   ├── CMakeLists.txt
+    │   ├── Include/
+    │   │   └── neo4j_bolt_transport/
+    │   │       ├── bolt_connection.h     # 实现 i_neo4j_connection.h
+    │   │       ├── bolt_result.h         # 实现 i_neo4j_result.h
+    │   │       └── bolt_transaction.h    # 实现 i_neo4j_transaction.h
+    │   │       └── i_socket_adaptor.h    # (从原 Neo4jBoltDriver 移过来)
+    │   └── Source/
+    │       ├── bolt_connection.cpp
+    │       ├── bolt_result.cpp
+    │       └── bolt_transaction.cpp
+    │       └── i_socket_adaptor.cpp
+    └── Neo4jHttpTransport/       # <--- HTTP/RESTful 协议的具体传输实现
+        ├── CMakeLists.txt
+        ├── Include/
+        │   └── neo4j_http_transport/
+        │       ├── http_connection.h     # 实现 i_neo4j_connection.h
+        │       ├── http_result.h         # 实现 i_neo4j_result.h
+        │       └── http_transaction.h    # 实现 i_neo4j_transaction.h
+        │       └── i_http_client.h       # 抽象 HTTP 客户端接口 (例如 send_request)
+        └── Source/
+            ├── http_connection.cpp
+            ├── http_result.cpp
+            ├── http_transaction.cpp
+            └── http_client_beast.cpp   # Beast+io_uring (或其他) 实现 i_http_client.h

@@ -1,16 +1,18 @@
+// Base/Protocol/BoltProtocol/Example/client_example_session.cpp
 #include "client_example_session.h"
 
-#include "boltprotocol/bolt_errors_versions.h"  // Provides boltprotocol::versions namespace
-#include "boltprotocol/message_defs.h"          // For DEFAULT_USER_AGENT_FORMAT_STRING etc.
+#include <array>  // For std::array in manual handshake simulation
+
+#include "boltprotocol/bolt_errors_versions.h"
+#include "boltprotocol/message_defs.h"
 
 // Anonymous namespace for implementation details or helpers local to this file
 namespace {
 
     boltprotocol::BoltError prepare_hello_message_bytes(const boltprotocol::versions::Version& target_version, std::vector<uint8_t>& out_bytes) {
-        using namespace boltprotocol;  // Brings boltprotocol members into scope
-        // For versions constants, we still need to qualify or use another using directive
-        using versions::V5_1;  // Specific using-declaration for V5_1
-        using versions::V5_3;  // Specific using-declaration for V5_3
+        using namespace boltprotocol;
+        using versions::V5_1;
+        using versions::V5_3;
 
         out_bytes.clear();
         PackStreamWriter ps_writer(out_bytes);
@@ -20,14 +22,13 @@ namespace {
         try {
             hello_params.user_agent = DEFAULT_USER_AGENT_FORMAT_STRING + " (Bolt " + std::to_string(target_version.major) + "." + std::to_string(target_version.minor) + ")";
 
-            // Compare with fully qualified or specifically "used" names
             if (target_version < V5_1) {
                 hello_params.auth_scheme = "basic";
                 hello_params.auth_principal = "neo4j";
                 hello_params.auth_credentials = "password";
             }
 
-            if (target_version == V5_3 || target_version < V5_3 == false) {  // Equivalent to target_version >= V5_3
+            if (target_version == V5_3 || !(target_version < V5_3)) {  // Equivalent to target_version >= V5_3
                 HelloMessageParams::BoltAgentInfo agent_info;
                 agent_info.product = "MyExampleClientLib/0.1";
                 agent_info.platform = "Cpp/LinuxGeneric";
@@ -55,10 +56,10 @@ namespace {
 
 boltprotocol::BoltError ClientSession::perform_handshake_sequence() {
     using namespace boltprotocol;
-    client_to_server_stream.clear();
-    client_to_server_stream.str("");
-    server_to_client_stream.clear();
-    server_to_client_stream.str("");
+    client_to_server_stream.clear();  // Clear flags
+    client_to_server_stream.str("");  // Clear content
+    server_to_client_stream.clear();  // Clear flags
+    server_to_client_stream.str("");  // Clear content
 
     std::vector<versions::Version> proposed_versions = versions::get_default_proposed_versions();
     if (proposed_versions.empty()) {
@@ -67,16 +68,55 @@ boltprotocol::BoltError ClientSession::perform_handshake_sequence() {
         return last_error;
     }
 
+    // Simulate server choosing the first proposed version
     versions::Version server_chosen_version_sim = proposed_versions[0];
     std::array<uint8_t, HANDSHAKE_RESPONSE_SIZE_BYTES> server_response_b = server_chosen_version_sim.to_handshake_bytes();
     server_to_client_stream.write(reinterpret_cast<const char*>(server_response_b.data()), HANDSHAKE_RESPONSE_SIZE_BYTES);
-    server_to_client_stream.seekg(0);
+    server_to_client_stream.seekg(0);  // Rewind for client to read
 
-    last_error = boltprotocol::perform_handshake(client_to_server_stream, server_to_client_stream, proposed_versions, negotiated_version);
+    // For std::stringstream, we need to pass them directly to a perform_handshake
+    // that is overloaded or templated to accept std::istream and std::ostream.
+    // The current template `perform_handshake(SyncReadWriteStream& stream, ...)`
+    // will not work directly with two separate std::stringstream.
+    // The previous attempt to call it with two std::stringstream instances was due to a
+    // misunderstanding of the template after it was changed from (ostream, istream, ...) form.
+
+    // Since client_example uses std::stringstream, and perform_handshake is now
+    // templated for a single SyncReadWriteStream (which std::stringstream does not model
+    // in the way Boost.ASIO sockets do, e.g. no write_some/read_some for asio::write/read free functions),
+    // we must manually implement the handshake byte exchange for the example.
+    // OR, we could create a simple wrapper for std::stringstream that *does* satisfy
+    // SyncReadWriteStream, but that's more involved for just an example.
+
+    std::array<uint8_t, HANDSHAKE_REQUEST_SIZE_BYTES> handshake_request_bytes_content;
+    last_error = build_handshake_request(proposed_versions, handshake_request_bytes_content);
     if (last_error != BoltError::SUCCESS) {
-        print_bolt_error_details_client("performing handshake", last_error);
+        print_bolt_error_details_client("Building handshake request for example", last_error);
         return last_error;
     }
+
+    client_to_server_stream.write(reinterpret_cast<const char*>(handshake_request_bytes_content.data()), HANDSHAKE_REQUEST_SIZE_BYTES);
+    if (client_to_server_stream.fail()) {
+        last_error = BoltError::NETWORK_ERROR;
+        print_bolt_error_details_client("Example: Writing handshake to client_to_server_stream", last_error);
+        return last_error;
+    }
+    client_to_server_stream.flush();  // Ensure it's "sent"
+
+    std::array<uint8_t, HANDSHAKE_RESPONSE_SIZE_BYTES> server_response_bytes_read;
+    server_to_client_stream.read(reinterpret_cast<char*>(server_response_bytes_read.data()), HANDSHAKE_RESPONSE_SIZE_BYTES);
+    if (server_to_client_stream.fail() || static_cast<size_t>(server_to_client_stream.gcount()) != HANDSHAKE_RESPONSE_SIZE_BYTES) {
+        last_error = BoltError::NETWORK_ERROR;
+        print_bolt_error_details_client("Example: Reading handshake response from server_to_client_stream", last_error);
+        return last_error;
+    }
+
+    last_error = parse_handshake_response(server_response_bytes_read, negotiated_version);
+    if (last_error != BoltError::SUCCESS) {
+        print_bolt_error_details_client("Example: Parsing handshake response", last_error);
+        return last_error;
+    }
+
     std::cout << "Client: Handshake successful! Negotiated version: " << static_cast<int>(negotiated_version.major) << "." << static_cast<int>(negotiated_version.minor) << std::endl;
     return BoltError::SUCCESS;
 }

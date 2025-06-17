@@ -1,19 +1,1 @@
 Starting Clang-Tidy analysis...
---- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Protocol/BoltProtocol/Example/server_example_main.cpp ---
-/media/root/newvolumn/fjw/memorycapsule/Base/Protocol/BoltProtocol/Example/server_example_main.cpp:82:21: error: no matching function for call to 'serialize_run_message' [clang-diagnostic-error]
-/media/root/newvolumn/fjw/memorycapsule/Base/Protocol/BoltProtocol/Example/server_example_main.cpp:140:15: error: no matching function for call to 'deserialize_run_message_request' [clang-diagnostic-error]
-----------------------------------------
---- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Protocol/BoltProtocol/Example/server_example_handlers.cpp ---
-/media/root/newvolumn/fjw/memorycapsule/Base/Protocol/BoltProtocol/Example/server_example_handlers.cpp:218:20: error: no member named 'extra_metadata' in 'boltprotocol::RunMessageParams' [clang-diagnostic-error]
-/media/root/newvolumn/fjw/memorycapsule/Base/Protocol/BoltProtocol/Example/server_example_handlers.cpp:249:36: error: no member named 'extra_metadata' in 'boltprotocol::RunMessageParams'; did you mean 'tx_metadata'? [clang-diagnostic-error]
-----------------------------------------
---- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/CppOrm/Source/builder_parts/query_builder_helpers.cpp ---
-/media/root/newvolumn/fjw/memorycapsule/Base/CppOrm/Source/builder_parts/query_builder_helpers.cpp:182:5: warning: Value stored to 'any_user_condition_written' is never read [clang-analyzer-deadcode.DeadStores]
-/media/root/newvolumn/fjw/memorycapsule/Base/CppOrm/Source/builder_parts/query_builder_helpers.cpp:182:5: note: Value stored to 'any_user_condition_written' is never read
-/media/root/newvolumn/fjw/memorycapsule/Base/CppOrm/Source/builder_parts/query_builder_helpers.cpp:209:7: warning: Value stored to 'main_clause_keyword_written_this_call' is never read [clang-analyzer-deadcode.DeadStores]
-/media/root/newvolumn/fjw/memorycapsule/Base/CppOrm/Source/builder_parts/query_builder_helpers.cpp:209:7: note: Value stored to 'main_clause_keyword_written_this_call' is never read
-----------------------------------------
---- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/CppOrm/Source/builder_parts/query_builder_utils.cpp ---
-/media/root/newvolumn/fjw/memorycapsule/Base/CppOrm/Source/builder_parts/query_builder_utils.cpp:263:5: warning: Value stored to 'any_user_condition_written' is never read [clang-analyzer-deadcode.DeadStores]
-/media/root/newvolumn/fjw/memorycapsule/Base/CppOrm/Source/builder_parts/query_builder_utils.cpp:263:5: note: Value stored to 'any_user_condition_written' is never read
-----------------------------------------

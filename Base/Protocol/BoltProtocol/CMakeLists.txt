@@ -18,6 +18,8 @@ target_include_directories(BoltProtocol
         "${CMAKE_CURRENT_SOURCE_DIR}/Include"
 )
 
+target_link_libraries(BoltProtocol PUBLIC Boost::asio OpenSSL::SSL OpenSSL::Crypto)
+
 # build example, no condition
 add_subdirectory(Example)
 
