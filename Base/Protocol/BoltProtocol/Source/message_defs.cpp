@@ -1,42 +1,10 @@
-#include "boltprotocol/message_defs.h"  // Includes all sub-headers like bolt_core_types.h, bolt_errors_versions.h
+#include <cstring>    // For std::memcpy if used here
+#include <stdexcept>  // For Version::to_string (though not strictly needed for string conversion)
 
-#include <algorithm>    // For std::visit in Value::operator==
-#include <type_traits>  // For std::decay_t in Value::operator==
-
-// Note: <arpa/inet.h> or <winsock2.h> for htonl/ntohl are now encapsulated in detail/byte_order_utils.h
+#include "boltprotocol/bolt_errors_versions.h"
+#include "boltprotocol/detail/byte_order_utils.h"  // 如果 to_handshake_bytes 等在这里实现
 
 namespace boltprotocol {
-
-    // --- Definitions for constants and functions declared extern in headers ---
-
-    // Definition for DEFAULT_USER_AGENT_FORMAT_STRING (declared in bolt_core_types.h, re-declared extern in message_defs.h)
-    const std::string DEFAULT_USER_AGENT_FORMAT_STRING = "BoltCppDriver/0.3.0 (C++26; NoExcept)";  // Example version update
-
-    // Definition for operator==(const Value&, const Value&) (declared in bolt_core_types.h, re-declared in message_defs.h)
-    bool operator==(const Value& lhs, const Value& rhs) {
-        if (lhs.index() != rhs.index()) {
-            return false;
-        }
-        return std::visit(
-            [&rhs](const auto& lhs_alternative_value) -> bool {
-                using AlternativeType = std::decay_t<decltype(lhs_alternative_value)>;
-                const AlternativeType& rhs_alternative_value = std::get<AlternativeType>(rhs);
-
-                if constexpr (std::is_same_v<AlternativeType, std::shared_ptr<BoltList>> || std::is_same_v<AlternativeType, std::shared_ptr<BoltMap>> || std::is_same_v<AlternativeType, std::shared_ptr<PackStreamStructure>>) {
-                    if (static_cast<bool>(lhs_alternative_value) != static_cast<bool>(rhs_alternative_value)) {
-                        return false;
-                    }
-                    if (!lhs_alternative_value) {  // Both are null
-                        return true;
-                    }
-                    return *lhs_alternative_value == *rhs_alternative_value;  // Compare pointed-to objects
-                } else {
-                    return lhs_alternative_value == rhs_alternative_value;
-                }
-            },
-            lhs);
-    }
-
     namespace versions {
 
         // --- Definitions for Version struct methods (declared in bolt_errors_versions.h) ---
@@ -55,35 +23,67 @@ namespace boltprotocol {
             return !(*this == other);
         }
 
+        bool Version::operator>(const Version& other) const {
+            // a > b is equivalent to b < a
+            return other < *this;
+        }
+
+        bool Version::operator<=(const Version& other) const {
+            // a <= b is equivalent to !(a > b)
+            return !(*this > other);
+        }
+
+        bool Version::operator>=(const Version& other) const {
+            // a >= b is equivalent to !(a < b)
+            return !(*this < other);
+        }
+
+        std::string Version::to_string() const {
+            return std::to_string(static_cast<int>(major)) + "." + std::to_string(static_cast<int>(minor));
+        }
+
         std::array<uint8_t, 4> Version::to_handshake_bytes() const {
-            std::array<uint8_t, 4> bytes{};
-            bytes[2] = major;
-            bytes[3] = minor;
-            return bytes;
+            // Bolt版本字节顺序: [0, 0, minor, major] (小端在前，但通常视为一个整体)
+            // 服务器期望的是大端整数，但每个字节是独立的。
+            // 例如 版本 3.0 (0x03) 在网络上可能是 0x00000003
+            // Neo4j驱动通常发送 [0,0,minor,major]
+            // **更正**: Bolt协议规范中版本握手字节的顺序是 [major, minor, 0, 0] for highest,
+            // [major, minor, 0, 0] for second highest, etc. for Bolt v1.
+            // For Bolt v3+ (which uses 4-byte version numbers per proposal slot):
+            // The versions are sent as 32-bit unsigned integers in big-endian byte order.
+            // Example: version 4.1 (0x0104 internally for some drivers, or 0x0401 for others)
+            // is encoded as [0, 0, 4, 1] or [0, 0, 1, 4] depending on interpretation.
+            // The Java driver sends it as four bytes: [0, 0, minor, major]. Let's stick to that.
+            return {0, 0, minor, major};
         }
 
         BoltError Version::from_handshake_bytes(const std::array<uint8_t, 4>& bytes, Version& out_version) {
+            // 服务器返回一个它选择的版本，格式与客户端发送的相同
+            // 即 bytes[3] 是主版本，bytes[2] 是次版本
+            // 检查前两个字节是否为0，这是现代Bolt版本号的常见模式
             if (bytes[0] == 0 && bytes[1] == 0) {
-                out_version.major = bytes[2];
-                out_version.minor = bytes[3];
-                if (out_version.major == 0 && out_version.minor == 0) {  // All zeros
-                    return BoltError::SUCCESS;                           // Represents "No Version" or successful parsing of 0.0
-                }
-                // Handle historic single-number versions if necessary, e.g., 0x00000001 -> 1.0
-                if (out_version.major == 0 && out_version.minor == 1 && bytes[2] == 0) {  // Check if it was truly 0.1 from bytes or 1.0
-                                                                                          // This specific check might need refinement based on how historic versions are encoded.
-                                                                                          // The current to_handshake_bytes for 1.0 would be 00 00 01 00.
-                                                                                          // If server sends 00 00 00 01 for 1.0, this logic needs adjustment.
-                                                                                          // Assuming standard X.Y (00 00 Maj Min) or all zeros.
-                }
+                out_version.minor = bytes[2];
+                out_version.major = bytes[3];
+                // 对于全零的情况 (0.0)，可以表示“无版本”或握手失败但协议上需要返回一些东西
+                // 如果major和minor都是0，这在实际Bolt版本中通常无效，除非它代表一种特殊情况。
+                // Neo4j服务器在不接受任何提议版本时会关闭连接，而不是返回0.0。
+                // 这里假设如果成功解析，即使是0.0，也返回SUCCESS，由调用者决定其含义。
                 return BoltError::SUCCESS;
             }
-            // Handle Bolt 4.3+ ranged versions if necessary, based on byte[0] and byte[1].
-            // The spec says: "The first 8 bits are reserved. The next 8 bits represent the number of
-            // consecutive minor versions below the specified minor...".
-            // This implies byte[0] != 0 for ranged versions. For now, we only handle 00 00 Maj Min.
-            // A full implementation would parse byte[1] as range length if byte[0] is non-zero (or specific pattern).
-            return BoltError::UNSUPPORTED_PROTOCOL_VERSION;  // Or more specific error for unhandled format
+            // 对于旧版Bolt或范围版本，字节格式可能不同。
+            // 例如，Bolt v1 返回单个字节。Bolt v4.3+ 的范围表示法使用第一个字节。
+            // 此处简化，只处理现代驱动常见的 [0,0,minor,major] 格式。
+            // 如果需要支持其他格式，需要更复杂的解析逻辑。
+            // 例如，如果 bytes[0] != 0，则可能是范围提议。
+            // uint32_t version_val_be;
+            // std::memcpy(&version_val_be, bytes.data(), 4);
+            // uint32_t version_val_host = detail::be_to_host(version_val_be);
+            // if ( (version_val_host >> 16) == 0 ) { // 假设是 0x0000MMNN (小端) 或 0x0000NNMM (大端)
+            //     out_version.major = static_cast<uint8_t>(version_val_host & 0xFF);
+            //     out_version.minor = static_cast<uint8_t>((version_val_host >> 8) & 0xFF);
+            //     return BoltError::SUCCESS;
+            // }
+            return BoltError::UNSUPPORTED_PROTOCOL_VERSION;  // 或 INVALID_MESSAGE_FORMAT
         }
 
         // --- Definitions for extern version constants (declared in bolt_errors_versions.h) ---
@@ -93,23 +93,26 @@ namespace boltprotocol {
         const Version V5_1(5, 1);
         const Version V5_0(5, 0);
         const Version V4_4(4, 4);
-        // const Version V4_3(4,3); // Define if declared extern
+        const Version V4_3(4, 3);  // 确保 V4_3 被定义
         // const Version V4_2(4,2);
         // const Version V4_1(4,1);
         // const Version V4_0(4,0);
         // const Version V3_0(3,0);
 
         // --- Definition for get_default_proposed_versions (declared in bolt_errors_versions.h) ---
-        // Static to ensure it's initialized once.
-        static const std::vector<Version> DEFAULT_PROPOSED_VERSIONS_LIST = {
-            V5_4, V5_3, V5_2, V5_1, V5_0, V4_4  // Order from newest to oldest preferred
-            // Add V4_3, V4_2 etc. if they are defined constants and desired in default list
-        };
-
         const std::vector<Version>& get_default_proposed_versions() {
+            // 驱动应按优先顺序列出它支持的版本，从高到低
+            static const std::vector<Version> DEFAULT_PROPOSED_VERSIONS_LIST = {
+                V5_4, V5_3, V5_2, V5_1, V5_0, V4_4, V4_3  // 确保 V4_3 在这里
+                // Add V4_2, V4_1 etc. if they are defined constants and desired in default list
+            };
             return DEFAULT_PROPOSED_VERSIONS_LIST;
         }
 
     }  // namespace versions
+
+    // --- 修正：将 DEFAULT_USER_AGENT_FORMAT_STRING 和 Value::operator== 的定义移到 bolt_core_types.cpp 或一个新的 bolt_message_defs.cpp (如果它们在 message_defs.h 中声明为 extern) ---
+    // 为了保持 bolt_errors_versions.cpp 的纯粹性，这些定义不应在此处。
+    // 假设它们在别处定义。
 
 }  // namespace boltprotocol

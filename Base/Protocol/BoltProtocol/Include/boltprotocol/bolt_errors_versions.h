@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstdint>
+#include <string>  // For Version::to_string (建议添加)
 #include <vector>
 
 namespace boltprotocol {
@@ -36,19 +37,27 @@ namespace boltprotocol {
             constexpr Version(uint8_t maj, uint8_t min) : major(maj), minor(min) {
             }
 
+            // 核心比较操作符
             bool operator<(const Version& other) const;
             bool operator==(const Version& other) const;
+
+            // 从核心操作符派生的其他比较操作符
             bool operator!=(const Version& other) const;
+            bool operator>(const Version& other) const;
+            bool operator<=(const Version& other) const;
+            bool operator>=(const Version& other) const;
+
+            std::string to_string() const;  // 便于调试
 
             std::array<uint8_t, 4> to_handshake_bytes() const;
             static BoltError from_handshake_bytes(const std::array<uint8_t, 4>& bytes, Version& out_version);
         };
 
-        // Declare version constants as extern
-        extern const Version V5_4, V5_3, V5_2, V5_1, V5_0, V4_4;
-        // extern const Version V4_3, V4_2, V4_1, V4_0, V3_0; // Add more if defined
+        // 声明版本常量
+        extern const Version V5_4, V5_3, V5_2, V5_1, V5_0, V4_4, V4_3;  // 确保 V4_3 也被声明
+        // extern const Version V4_2, V4_1, V4_0, V3_0;
 
-        // Declare the function to get default proposed versions
+        // 声明函数以获取默认建议版本
         extern const std::vector<Version>& get_default_proposed_versions();
     }  // namespace versions
 

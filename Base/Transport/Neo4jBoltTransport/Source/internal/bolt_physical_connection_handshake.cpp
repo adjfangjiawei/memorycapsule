@@ -1,6 +1,6 @@
-// Source/internal/bolt_physical_connection_handshake.cpp
-#include <iostream>
+#include <iostream>  // 调试用
 
+#include "boltprotocol/handshake.h"  // 包含 perform_handshake
 #include "neo4j_bolt_transport/error/neo4j_error_util.h"
 #include "neo4j_bolt_transport/internal/bolt_physical_connection.h"
 
@@ -12,7 +12,7 @@ namespace neo4j_bolt_transport {
 
             if (conn_config_.encryption_enabled) {
                 expected_prev_state = InternalState::SSL_HANDSHAKEN;
-                if (!ssl_stream_ || !ssl_stream_->lowest_layer().is_open()) {
+                if (!ssl_stream_sync_ || !ssl_stream_sync_->lowest_layer().is_open()) {
                     _mark_as_defunct(boltprotocol::BoltError::NETWORK_ERROR, "SSL stream not ready for Bolt handshake.");
                     if (logger_) logger_->error("[ConnHandshake {}] SSL stream not ready for Bolt handshake. State: {}", id_, _get_current_state_as_string());
                     return last_error_code_;
@@ -28,7 +28,7 @@ namespace neo4j_bolt_transport {
 
             InternalState current_s = current_state_.load(std::memory_order_relaxed);
             if (current_s != expected_prev_state) {
-                std::string msg = "Bolt handshake called in unexpected state: " + _get_current_state_as_string() + ". Expected: " + std::to_string(static_cast<int>(expected_prev_state));
+                std::string msg = "Bolt handshake called in unexpected state: " + _get_current_state_as_string() + ". Expected state code: " + std::to_string(static_cast<int>(expected_prev_state));
                 _mark_as_defunct(boltprotocol::BoltError::UNKNOWN_ERROR, msg);
                 if (logger_) logger_->error("[ConnHandshake {}] {}", id_, msg);
                 return last_error_code_;
@@ -36,7 +36,13 @@ namespace neo4j_bolt_transport {
             current_state_.store(InternalState::BOLT_HANDSHAKING, std::memory_order_relaxed);
             if (logger_) logger_->debug("[ConnHandshake {}] Performing Bolt handshake.", id_);
 
-            std::vector<boltprotocol::versions::Version> proposed_versions = boltprotocol::versions::get_default_proposed_versions();
+            std::vector<boltprotocol::versions::Version> proposed_versions;
+            if (conn_config_.preferred_bolt_versions.has_value() && !conn_config_.preferred_bolt_versions.value().empty()) {  // 正确访问 optional
+                proposed_versions = conn_config_.preferred_bolt_versions.value();
+            } else {
+                proposed_versions = boltprotocol::versions::get_default_proposed_versions();
+            }
+
             if (proposed_versions.empty()) {
                 _mark_as_defunct(boltprotocol::BoltError::INVALID_ARGUMENT, "No Bolt versions to propose for handshake.");
                 if (logger_) logger_->error("[ConnHandshake {}] No Bolt versions to propose.", id_);
@@ -45,10 +51,8 @@ namespace neo4j_bolt_transport {
 
             boltprotocol::BoltError err;
             if (conn_config_.encryption_enabled) {
-                // 修正：只传递一个流对象，它既用于读也用于写
-                err = boltprotocol::perform_handshake(*ssl_stream_, proposed_versions, negotiated_bolt_version_);
+                err = boltprotocol::perform_handshake(*ssl_stream_sync_, proposed_versions, negotiated_bolt_version_);
             } else {
-                // 修正：只传递一个流对象
                 err = boltprotocol::perform_handshake(*plain_iostream_wrapper_, proposed_versions, negotiated_bolt_version_);
             }
 
@@ -65,7 +69,6 @@ namespace neo4j_bolt_transport {
             return boltprotocol::BoltError::SUCCESS;
         }
 
-        // ... (函数 _stage_send_hello_and_initial_auth 保持不变) ...
         boltprotocol::BoltError BoltPhysicalConnection::_stage_send_hello_and_initial_auth() {
             if (current_state_.load(std::memory_order_relaxed) != InternalState::BOLT_HANDSHAKEN) {
                 std::string msg = "HELLO/Auth stage called in unexpected state: " + _get_current_state_as_string();
@@ -80,7 +83,7 @@ namespace neo4j_bolt_transport {
             hello_p.bolt_agent = conn_config_.bolt_agent_info_for_hello;
 
             bool auth_attempted_in_hello = false;
-            if (negotiated_bolt_version_ < boltprotocol::versions::Version(5, 1)) {
+            if (negotiated_bolt_version_ < boltprotocol::versions::Version(5, 1)) {  // 正确比较
                 std::visit(
                     [&](auto&& arg) {
                         using T = std::decay_t<decltype(arg)>;
@@ -100,7 +103,9 @@ namespace neo4j_bolt_transport {
                                 hello_p.other_extra_tokens["realm"] = *arg.realm;
                             }
                             if (arg.parameters.has_value()) {
-                                hello_p.auth_scheme_specific_tokens = *arg.parameters;
+                                for (const auto& kv : *arg.parameters) {
+                                    if (kv.first != "scheme" && kv.first != "principal" && kv.first != "credentials" && kv.first != "realm") hello_p.other_extra_tokens[kv.first] = kv.second;
+                                }
                             }
                             auth_attempted_in_hello = true;
                         } else if constexpr (std::is_same_v<T, config::BearerAuth>) {
@@ -117,6 +122,11 @@ namespace neo4j_bolt_transport {
                         }
                     },
                     conn_config_.auth_token);
+            } else {
+                if (std::holds_alternative<config::NoAuth>(conn_config_.auth_token)) {
+                    hello_p.auth_scheme = "none";
+                    auth_attempted_in_hello = true;
+                }
             }
 
             if (conn_config_.hello_routing_context.has_value()) {
@@ -144,6 +154,7 @@ namespace neo4j_bolt_transport {
             err = send_request_receive_summary(hello_payload_bytes, success_meta, failure_meta);
 
             if (err != boltprotocol::BoltError::SUCCESS) {
+                if (logger_) logger_->error("[ConnHandshake {}] HELLO send/receive summary failed. Error: {}, Msg: {}", id_, static_cast<int>(last_error_code_), last_error_message_);
                 return last_error_code_;
             }
             if (last_error_code_ != boltprotocol::BoltError::SUCCESS) {
@@ -154,15 +165,11 @@ namespace neo4j_bolt_transport {
             if (logger_) logger_->debug("[ConnHandshake {}] HELLO successful. Server: {}, ConnId: {}", id_, server_agent_string_, server_assigned_conn_id_);
 
             bool needs_separate_logon = false;
-            if (!(negotiated_bolt_version_ < boltprotocol::versions::Version(5, 1)) && !auth_attempted_in_hello) {
-                std::visit(
-                    [&](auto&& arg) {
-                        using T = std::decay_t<decltype(arg)>;
-                        if constexpr (!std::is_same_v<T, config::NoAuth>) {
-                            needs_separate_logon = true;
-                        }
-                    },
-                    conn_config_.auth_token);
+            // 使用 >=
+            if (negotiated_bolt_version_ >= boltprotocol::versions::Version(5, 1) && !auth_attempted_in_hello) {
+                if (!std::holds_alternative<config::NoAuth>(conn_config_.auth_token)) {
+                    needs_separate_logon = true;
+                }
             }
 
             if (needs_separate_logon) {
@@ -171,9 +178,10 @@ namespace neo4j_bolt_transport {
                 _prepare_logon_params_from_config(logon_p);
 
                 boltprotocol::SuccessMessageParams logon_success_meta;
-                err = _execute_logon_message(logon_p, logon_success_meta, failure_meta);
-                if (err != boltprotocol::BoltError::SUCCESS) {
-                    if (logger_) logger_->error("[ConnHandshake {}] Separate LOGON failed. Code: {}, Msg: {}", id_, static_cast<int>(last_error_code_), last_error_message_);
+                boltprotocol::FailureMessageParams logon_failure_meta;
+                err = _execute_logon_message(logon_p, logon_success_meta, logon_failure_meta);
+                if (err != boltprotocol::BoltError::SUCCESS || last_error_code_ != boltprotocol::BoltError::SUCCESS) {
+                    if (logger_) logger_->error("[ConnHandshake {}] Separate LOGON failed. Error: {}, Msg: {}", id_, static_cast<int>(last_error_code_), last_error_message_);
                     return last_error_code_;
                 }
                 _update_metadata_from_logon_success(logon_success_meta);
@@ -181,7 +189,7 @@ namespace neo4j_bolt_transport {
             }
 
             if (current_state_.load(std::memory_order_relaxed) != InternalState::READY) {
-                std::string msg = "Connection not READY after HELLO/LOGON sequence. State: " + _get_current_state_as_string();
+                std::string msg = "Connection not READY after HELLO/LOGON sequence. Final state: " + _get_current_state_as_string();
                 _mark_as_defunct(boltprotocol::BoltError::UNKNOWN_ERROR, msg);
                 if (logger_) logger_->error("[ConnHandshake {}] {}", id_, msg);
                 return last_error_code_;
