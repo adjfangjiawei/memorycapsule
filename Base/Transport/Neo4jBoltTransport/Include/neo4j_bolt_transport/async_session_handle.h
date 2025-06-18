@@ -14,7 +14,7 @@
 #include "boltprotocol/message_defs.h"
 #include "config/session_parameters.h"
 #include "internal/async_types.h"
-#include "neo4j_bolt_transport/config/transport_config.h"
+#include "neo4j_bolt_transport/config/transport_config.h"  // For AsyncTransactionConfigOverrides, if defined here
 #include "result_summary.h"
 
 // Conditional include for OpenSSL headers
@@ -29,7 +29,7 @@ namespace neo4j_bolt_transport {
     class Neo4jBoltTransport;
     class AsyncResultStream;
 
-    struct AsyncTransactionConfigOverrides {
+    struct AsyncTransactionConfigOverrides {  // Assuming this is the agreed upon location
         std::optional<std::map<std::string, boltprotocol::Value>> metadata;
         std::optional<std::chrono::milliseconds> timeout;
     };
@@ -72,9 +72,6 @@ namespace neo4j_bolt_transport {
 
         // --- Bookmark Management ---
         const std::vector<std::string>& get_last_bookmarks() const;
-        // Typically, bookmarks are updated internally based on server responses.
-        // A public set_bookmarks might be for advanced scenarios or testing.
-        // void set_bookmarks(std::vector<std::string> bookmarks);
 
         bool is_valid() const;
         bool is_closed() const {
@@ -94,19 +91,22 @@ namespace neo4j_bolt_transport {
 
         boost::asio::awaitable<boltprotocol::BoltError> send_goodbye_if_appropriate_async();
         void mark_closed();
-        boltprotocol::RunMessageParams _prepare_run_message_params(const std::string& cypher, const std::map<std::string, boltprotocol::Value>& parameters);
+
+        boltprotocol::RunMessageParams _prepare_run_message_params(const std::string& cypher,
+                                                                   const std::map<std::string, boltprotocol::Value>& parameters,
+                                                                   bool is_in_explicit_tx  // Parameter to distinguish context
+        );
         boltprotocol::BeginMessageParams _prepare_begin_message_params(const std::optional<AsyncTransactionConfigOverrides>& tx_config);
 
         boost::asio::awaitable<TransactionWorkResult> _execute_transaction_work_internal_async(AsyncTransactionWork work, config::AccessMode mode_hint, const std::optional<AsyncTransactionConfigOverrides>& tx_config);
 
-        // Internal method to update bookmarks from a SUCCESS summary
         void _update_bookmarks_from_summary(const boltprotocol::SuccessMessageParams& summary_params);
 
         Neo4jBoltTransport* transport_manager_;
         config::SessionParameters session_params_;
         std::unique_ptr<internal::ActiveAsyncStreamContext> stream_context_;
 
-        std::vector<std::string> current_bookmarks_;  // Stores the last known good bookmarks
+        std::vector<std::string> current_bookmarks_;
 
         std::atomic<bool> is_closed_;
         std::atomic<bool> close_initiated_;

@@ -7,6 +7,7 @@
 
 namespace neo4j_bolt_transport {
 
+    // begin_transaction_async (保持 Batch 21 的实现，它已使用 _prepare_begin_message_params)
     boost::asio::awaitable<boltprotocol::BoltError> AsyncSessionHandle::begin_transaction_async(const std::optional<AsyncTransactionConfigOverrides>& tx_config) {
         std::shared_ptr<spdlog::logger> logger = nullptr;
         if (transport_manager_ && transport_manager_->get_config().logger) {
@@ -22,7 +23,7 @@ namespace neo4j_bolt_transport {
             co_return boltprotocol::BoltError::INVALID_ARGUMENT;
         }
 
-        boltprotocol::BeginMessageParams begin_params = _prepare_begin_message_params(tx_config);  // Uses helper
+        boltprotocol::BeginMessageParams begin_params = _prepare_begin_message_params(tx_config);
         std::vector<uint8_t> begin_payload;
         boltprotocol::PackStreamWriter writer(begin_payload);
         boltprotocol::BoltError serialize_err = boltprotocol::serialize_begin_message(begin_params, writer, stream_context_->negotiated_bolt_version);
@@ -40,7 +41,7 @@ namespace neo4j_bolt_transport {
             if (logger_copy) logger_copy->error("[AsyncSessionTXCtrl:StaticOpErrHandler] BEGIN Error: {} - {}", static_cast<int>(reason), message);
         };
 
-        if (logger) logger->debug("[AsyncSessionTXCtrl] Sending BEGIN message. DB: {}, Bookmarks: {}", begin_params.db.value_or("<default>"), begin_params.bookmarks.has_value() ? std::to_string(begin_params.bookmarks->size()) : "0");
+        if (logger) logger->debug("[AsyncSessionTXCtrl] Sending BEGIN message. DB: {}, Bookmarks used: {}", begin_params.db.value_or("<default>"), begin_params.bookmarks.has_value() && !begin_params.bookmarks.value().empty() ? "Yes" : "No");
 
         auto [summary_err, begin_summary_obj] = co_await internal::BoltPhysicalConnection::send_request_receive_summary_async_static(*stream_context_, begin_payload, stream_context_->original_config, logger, static_op_error_handler);
 
@@ -101,7 +102,7 @@ namespace neo4j_bolt_transport {
             co_return last_error_code_;
         }
 
-        _update_bookmarks_from_summary(commit_summary_obj.raw_params());
+        _update_bookmarks_from_summary(commit_summary_obj.raw_params());  // Update bookmarks
         last_error_code_ = boltprotocol::BoltError::SUCCESS;
         last_error_message_ = "";
         if (logger) logger->info("[AsyncSessionTXCtrl] Asynchronous transaction committed. Last bookmarks: {}", current_bookmarks_.empty() ? "<none>" : current_bookmarks_[0]);
@@ -152,6 +153,9 @@ namespace neo4j_bolt_transport {
         if (summary_err != boltprotocol::BoltError::SUCCESS) {
             co_return last_error_code_;
         }
+
+        current_bookmarks_.clear();  // Clear bookmarks on rollback
+        if (logger) logger->trace("[AsyncSessionTXCtrl] Bookmarks cleared after rollback.");
 
         last_error_code_ = boltprotocol::BoltError::SUCCESS;
         last_error_message_ = "";

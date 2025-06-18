@@ -1,5 +1,5 @@
 #include "neo4j_bolt_transport/async_session_handle.h"
-#include "neo4j_bolt_transport/neo4j_bolt_transport.h"  // For transport_manager_ access
+#include "neo4j_bolt_transport/neo4j_bolt_transport.h"
 
 namespace neo4j_bolt_transport {
 
@@ -7,7 +7,7 @@ namespace neo4j_bolt_transport {
     boltprotocol::BeginMessageParams AsyncSessionHandle::_prepare_begin_message_params(const std::optional<AsyncTransactionConfigOverrides>& tx_config) {
         boltprotocol::BeginMessageParams begin_p;
 
-        if (!current_bookmarks_.empty()) {
+        if (!current_bookmarks_.empty()) {  // Use current session bookmarks
             begin_p.bookmarks = current_bookmarks_;
         }
 
@@ -19,11 +19,11 @@ namespace neo4j_bolt_transport {
                 begin_p.imp_user = session_params_.impersonated_user;
             }
             // Access mode for BEGIN (Bolt 5.0+)
+            // Assuming V5_0 is a defined macro in boltprotocol::versions
             if (stream_context_->negotiated_bolt_version >= boltprotocol::versions::V5_0) {
                 if (session_params_.default_access_mode == config::AccessMode::READ) {
                     begin_p.mode = "r";
                 }
-                // Default is "w" (write) if not specified by session_params_ or overridden
             }
 
             if (tx_config.has_value()) {
@@ -40,11 +40,9 @@ namespace neo4j_bolt_transport {
         return begin_p;
     }
 
-    // _prepare_run_message_params was previously in async_session_handle_query_execution.cpp or header.
-    // If it's also heavily used by transaction logic (e.g. run_query_in_transaction_async preparing its own RUN),
-    // it can live here. For now, assuming its primary definition is elsewhere or in the header if general.
-    // If it's only used by run_query_in_transaction_async, it should be co-located with it or be a static helper.
-    // For this refactoring, let's assume _prepare_run_message_params is defined in the header or its original location.
-    // The one in async_session_handle.h for auto-commit queries is distinct.
+    // _prepare_run_message_params is now moved to/defined in async_session_handle_query_execution.cpp
+    // as it's used by both auto-commit and explicit-tx run methods which are in that file or
+    // async_session_handle_explicit_tx_query.cpp respectively.
+    // The version in async_session_handle.h now has the bool is_in_explicit_tx parameter.
 
 }  // namespace neo4j_bolt_transport

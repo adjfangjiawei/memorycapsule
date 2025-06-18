@@ -1,4 +1,4 @@
-#include <utility>  // For std::move
+#include <utility>
 
 #include "boltprotocol/message_serialization.h"
 #include "boltprotocol/packstream_reader.h"
@@ -32,6 +32,7 @@ namespace neo4j_bolt_transport {
 
         if (!effectively_has_more_on_server) {
             stream_fully_consumed_or_discarded_.store(true, std::memory_order_release);
+            try_update_session_bookmarks_on_stream_end();  // MODIFIED: Call bookmark update
             if (is_first_fetch_attempt_ && logger) {
                 logger->trace("[AsyncResultStream {}] ensure_records_buffered: No initial records and RUN summary indicated no more.", (void*)this);
             }
@@ -54,7 +55,6 @@ namespace neo4j_bolt_transport {
 
         boltprotocol::PullMessageParams pull_p;
         pull_p.n = fetch_n;
-        // Assuming user has corrected this to use appropriate version check
         if (query_id_.has_value() && (stream_context_->negotiated_bolt_version.major >= 4)) {
             pull_p.qid = query_id_;
         }
@@ -147,9 +147,11 @@ namespace neo4j_bolt_transport {
         }
         if (!server_has_more_records_after_last_pull_.load(std::memory_order_acquire)) {
             stream_fully_consumed_or_discarded_.store(true, std::memory_order_release);
+            try_update_session_bookmarks_on_stream_end();  // MODIFIED: Call bookmark update
             co_return std::make_tuple(boltprotocol::BoltError::SUCCESS, "", false);
         }
-        co_return std::make_tuple(boltprotocol::BoltError::UNKNOWN_ERROR, "ensure_records_buffered_async: Inconsistent state after PULL.", false);
+        set_failure_state(boltprotocol::BoltError::UNKNOWN_ERROR, "ensure_records_buffered_async: Inconsistent state after PULL - summary received, no records, but server_has_more might be outdated if not in summary.");
+        co_return std::make_tuple(failure_reason_.load(std::memory_order_acquire), failure_message_, false);
     }
 
 }  // namespace neo4j_bolt_transport

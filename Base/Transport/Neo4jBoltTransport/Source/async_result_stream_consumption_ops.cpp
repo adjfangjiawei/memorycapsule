@@ -1,4 +1,4 @@
-#include <utility>  // For std::move
+#include <utility>
 
 #include "boltprotocol/message_serialization.h"
 #include "boltprotocol/packstream_reader.h"
@@ -11,7 +11,7 @@
 
 namespace neo4j_bolt_transport {
 
-    // --- AsyncResultStream Private Helper: send_discard_async ---
+    // --- send_discard_async (保持不变) ---
     boost::asio::awaitable<boltprotocol::BoltError> AsyncResultStream::send_discard_async(int64_t n, boltprotocol::SuccessMessageParams& out_discard_summary_raw) {
         std::shared_ptr<spdlog::logger> logger = nullptr;
         if (owner_session_ && owner_session_->transport_manager_ && owner_session_->transport_manager_->get_config().logger) {
@@ -25,7 +25,6 @@ namespace neo4j_bolt_transport {
 
         boltprotocol::DiscardMessageParams discard_p;
         discard_p.n = n;
-        // Assuming user has corrected this to use appropriate version check
         if (query_id_.has_value() && (stream_context_->negotiated_bolt_version.major >= 4)) {
             discard_p.qid = query_id_;
         }
@@ -110,7 +109,7 @@ namespace neo4j_bolt_transport {
         co_return final_discard_status;
     }
 
-    // --- AsyncResultStream Public Method: consume_async ---
+    // --- AsyncResultStream Public Method: consume_async (MODIFIED) ---
     boost::asio::awaitable<std::pair<boltprotocol::BoltError, ResultSummary>> AsyncResultStream::consume_async() {
         std::shared_ptr<spdlog::logger> logger = nullptr;
         if (owner_session_ && owner_session_->transport_manager_ && owner_session_->transport_manager_->get_config().logger) {
@@ -131,6 +130,7 @@ namespace neo4j_bolt_transport {
 
         if (!needs_server_discard_op) {
             stream_fully_consumed_or_discarded_.store(true, std::memory_order_release);
+            try_update_session_bookmarks_on_stream_end();  // MODIFIED: Call bookmark update
             if (logger) logger->trace("[AsyncResultStream {}] consume_async: No records on server to discard. Stream considered consumed.", (void*)this);
             co_return std::make_pair(boltprotocol::BoltError::SUCCESS, final_summary_typed_);
         }
@@ -142,11 +142,14 @@ namespace neo4j_bolt_transport {
         stream_fully_consumed_or_discarded_.store(true, std::memory_order_release);
 
         if (discard_op_err != boltprotocol::BoltError::SUCCESS) {
+            // failure_reason_ and failure_message_ should be set by send_discard_async or its error handler
             co_return std::make_pair(failure_reason_.load(std::memory_order_acquire), final_summary_typed_);
         }
 
+        // DISCARD was successful at protocol level, update the final summary with its result
         update_final_summary(std::move(discard_summary_raw));
         server_has_more_records_after_last_pull_.store(false, std::memory_order_release);
+        try_update_session_bookmarks_on_stream_end();  // MODIFIED: Call bookmark update
 
         if (logger) logger->trace("[AsyncResultStream {}] consume_async successful.", (void*)this);
         co_return std::make_pair(boltprotocol::BoltError::SUCCESS, final_summary_typed_);

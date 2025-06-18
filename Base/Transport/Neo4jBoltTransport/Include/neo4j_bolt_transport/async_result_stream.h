@@ -7,7 +7,7 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <tuple>  // For std::tuple
+#include <tuple>
 #include <vector>
 
 #include "bolt_record.h"
@@ -29,7 +29,9 @@ namespace neo4j_bolt_transport {
                           std::shared_ptr<const std::vector<std::string>> field_names,
                           std::vector<boltprotocol::RecordMessageParams> initial_records_raw,
                           bool server_had_more_after_run,
-                          const config::SessionParameters& session_config);
+                          const config::SessionParameters& session_config,
+                          bool is_auto_commit  // New parameter
+        );
 
         ~AsyncResultStream();
 
@@ -40,16 +42,10 @@ namespace neo4j_bolt_transport {
 
         boost::asio::awaitable<std::tuple<boltprotocol::BoltError, std::string, std::optional<BoltRecord>>> next_async();
 
-        // Asynchronously consumes all remaining records and returns the final summary.
         boost::asio::awaitable<std::pair<boltprotocol::BoltError, ResultSummary>> consume_async();
 
-        // Asynchronously retrieves a single record from the stream.
-        // Fails if the stream does not contain exactly one record.
-        // Consumes the stream.
         boost::asio::awaitable<std::tuple<boltprotocol::BoltError, std::string, std::optional<BoltRecord>>> single_async();
 
-        // Asynchronously retrieves all records from the stream and returns them as a vector.
-        // Consumes the stream.
         boost::asio::awaitable<std::tuple<boltprotocol::BoltError, std::string, std::vector<BoltRecord>>> list_all_async();
 
         const ResultSummary& run_summary() const {
@@ -83,11 +79,13 @@ namespace neo4j_bolt_transport {
 
         void set_failure_state(boltprotocol::BoltError reason, std::string detailed_message, const std::optional<boltprotocol::FailureMessageParams>& details = std::nullopt);
         void update_final_summary(boltprotocol::SuccessMessageParams&& pull_or_discard_raw_summary);
+        void try_update_session_bookmarks_on_stream_end();  // New helper
 
         AsyncSessionHandle* owner_session_;
         std::unique_ptr<internal::ActiveAsyncStreamContext> stream_context_;
         std::optional<int64_t> query_id_;
         config::SessionParameters session_config_cache_;
+        bool is_auto_commit_;  // New member to track if this stream is from an auto-commit query
 
         std::deque<boltprotocol::RecordMessageParams> raw_record_buffer_;
         std::shared_ptr<const std::vector<std::string>> field_names_ptr_cache_;
