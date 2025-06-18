@@ -2,10 +2,14 @@
 #define NEO4J_BOLT_TRANSPORT_INTERNAL_BOLT_PHYSICAL_CONNECTION_H
 
 #include <atomic>
-#include <boost/asio.hpp>
 #include <boost/asio/awaitable.hpp>
+#include <boost/asio/basic_socket_iostream.hpp>
+#include <boost/asio/buffer.hpp>
 #include <boost/asio/co_spawn.hpp>
+#include <boost/asio/connect.hpp>
 #include <boost/asio/detached.hpp>
+#include <boost/asio/executor_work_guard.hpp>
+#include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/redirect_error.hpp>
 #include <boost/asio/ssl/context.hpp>
@@ -34,11 +38,14 @@ namespace neo4j_bolt_transport {
 
     class SessionHandle;
     class AsyncSessionHandle;
+    class AsyncResultStream;
 
     namespace internal {
 
         class BoltPhysicalConnection : public std::enable_shared_from_this<BoltPhysicalConnection>, public IAsyncContextCallbacks {
           public:
+            friend class neo4j_bolt_transport::AsyncResultStream;
+
             using PooledConnection = std::unique_ptr<BoltPhysicalConnection>;
             enum class InternalState {
                 FRESH,
@@ -105,7 +112,7 @@ namespace neo4j_bolt_transport {
             boost::asio::awaitable<boltprotocol::BoltError> terminate_async(bool send_goodbye = true);
             boost::asio::awaitable<boltprotocol::BoltError> ping_async(std::chrono::milliseconds timeout);
 
-            // --- Static-like Async Messaging Utilities (used by AsyncSessionHandle) ---
+            // --- Static-like Async Messaging Utilities ---
             static boost::asio::awaitable<std::pair<boltprotocol::BoltError, ResultSummary>> send_request_receive_summary_async_static(
                 internal::ActiveAsyncStreamContext& stream_ctx, const std::vector<uint8_t>& request_payload, const BoltConnectionConfig& conn_config_ref, std::shared_ptr<spdlog::logger> logger_ref, std::function<void(boltprotocol::BoltError, const std::string&)> error_handler);
 
@@ -114,7 +121,6 @@ namespace neo4j_bolt_transport {
                                                                                              std::shared_ptr<spdlog::logger> logger_ref,
                                                                                              std::function<void(boltprotocol::BoltError, const std::string&)> error_handler);
 
-            // --- IAsyncContextCallbacks implementation ---
             std::shared_ptr<spdlog::logger> get_logger() const override;
             uint64_t get_id_for_logging() const override;
             void mark_as_defunct_from_async(boltprotocol::BoltError reason, const std::string& message) override;
@@ -126,18 +132,13 @@ namespace neo4j_bolt_transport {
             friend class neo4j_bolt_transport::AsyncSessionHandle;
 
             // --- Static Private Asynchronous Chunking Helpers ---
-            // These are called by other static async methods of this class.
-            static boost::asio::awaitable<boltprotocol::BoltError> _send_chunked_payload_async_static_helper(internal::ActiveAsyncStreamContext& stream_ctx,
-                                                                                                             std::vector<uint8_t> payload,  // Pass by value for move
-                                                                                                             const BoltConnectionConfig& conn_config_ref,
-                                                                                                             std::shared_ptr<spdlog::logger> logger_ref,
-                                                                                                             std::function<void(boltprotocol::BoltError, const std::string&)> error_handler);
+            static boost::asio::awaitable<boltprotocol::BoltError> _send_chunked_payload_async_static_helper(
+                internal::ActiveAsyncStreamContext& stream_ctx, std::vector<uint8_t> payload, const BoltConnectionConfig& conn_config_ref, std::shared_ptr<spdlog::logger> logger_ref, std::function<void(boltprotocol::BoltError, const std::string&)> error_handler);
 
             static boost::asio::awaitable<std::pair<boltprotocol::BoltError, std::vector<uint8_t>>> _receive_chunked_payload_async_static_helper(internal::ActiveAsyncStreamContext& stream_ctx,
                                                                                                                                                  const BoltConnectionConfig& conn_config_ref,
                                                                                                                                                  std::shared_ptr<spdlog::logger> logger_ref,
                                                                                                                                                  std::function<void(boltprotocol::BoltError, const std::string&)> error_handler);
-            // --- End Static Private Asynchronous Chunking Helpers ---
 
             // --- Synchronous Lifecycle Stages ---
             boltprotocol::BoltError _stage_tcp_connect();
@@ -167,12 +168,21 @@ namespace neo4j_bolt_transport {
             boltprotocol::BoltError _send_chunked_payload_sync(const std::vector<uint8_t>& payload);
             boltprotocol::BoltError _receive_chunked_payload_sync(std::vector<uint8_t>& out_payload);
 
-            // --- Asynchronous IO and Chunking (Instance methods, used by establish_async) ---
-            boost::asio::awaitable<boltprotocol::BoltError> _write_to_active_async_stream(std::variant<boost::asio::ip::tcp::socket*, boost::asio::ssl::stream<boost::asio::ip::tcp::socket>*>& stream_variant_ref, const std::vector<uint8_t>& data);
+            // --- Asynchronous IO (Instance Members) ---
+            // These are used by the instance's async lifecycle stages (_stage_..._async methods)
+            // The stream_variant_ref here refers to a stream managed *during* the async establishment process,
+            // which will eventually be moved into ActiveAsyncStreamContext.
+            boost::asio::awaitable<boltprotocol::BoltError> _write_to_active_async_stream(std::variant<boost::asio::ip::tcp::socket*, boost::asio::ssl::stream<boost::asio::ip::tcp::socket>*>& stream_variant_ref,
+                                                                                          const std::vector<uint8_t>& data);  // Pass data by const ref
+
             boost::asio::awaitable<std::pair<boltprotocol::BoltError, std::vector<uint8_t>>> _read_from_active_async_stream(std::variant<boost::asio::ip::tcp::socket*, boost::asio::ssl::stream<boost::asio::ip::tcp::socket>*>& stream_variant_ref, size_t size_to_read);
-            // Instance versions of async chunking (if needed by establish_async or similar instance methods)
-            // For now, establish_async itself handles chunking for HELLO/LOGON directly or via its _stage methods.
-            // The static helpers are for external use (e.g., AsyncSessionHandle).
+
+            // --- Asynchronous Chunking (Instance Members) ---
+            // These use the _write/_read_to_active_async_stream instance members above.
+            boost::asio::awaitable<boltprotocol::BoltError> _send_chunked_payload_async(std::variant<boost::asio::ip::tcp::socket*, boost::asio::ssl::stream<boost::asio::ip::tcp::socket>*>& stream_variant_ref,
+                                                                                        std::vector<uint8_t> payload);  // Pass payload by value for move
+
+            boost::asio::awaitable<std::pair<boltprotocol::BoltError, std::vector<uint8_t>>> _receive_chunked_payload_async(std::variant<boost::asio::ip::tcp::socket*, boost::asio::ssl::stream<boost::asio::ip::tcp::socket>*>& stream_variant_ref);
 
             // --- Message Processing Helpers ---
             boltprotocol::BoltError _peek_message_tag(const std::vector<uint8_t>& payload, boltprotocol::MessageTag& out_tag) const;
@@ -186,17 +196,15 @@ namespace neo4j_bolt_transport {
 
             // --- Member Variables ---
             uint64_t id_;
-            BoltConnectionConfig conn_config_;  // Configuration for this specific connection instance
+            BoltConnectionConfig conn_config_;
             boost::asio::io_context& io_context_ref_;
             std::shared_ptr<spdlog::logger> logger_;
 
-            // Resources for synchronous operations
             std::unique_ptr<boost::asio::ip::tcp::socket> owned_socket_for_sync_plain_;
             std::unique_ptr<boost::asio::ip::tcp::iostream> plain_iostream_wrapper_;
             std::unique_ptr<boost::asio::ssl::context> ssl_context_sync_;
             std::unique_ptr<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>> ssl_stream_sync_;
 
-            // State variables
             std::atomic<InternalState> current_state_;
             boltprotocol::versions::Version negotiated_bolt_version_;
             std::string server_agent_string_;

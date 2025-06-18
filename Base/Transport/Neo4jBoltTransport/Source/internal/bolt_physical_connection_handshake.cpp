@@ -1,12 +1,20 @@
+#include <array>  // For server_response_bytes_read
+#include <boost/asio/co_spawn.hpp>
+#include <boost/asio/detached.hpp>
+#include <boost/asio/redirect_error.hpp>
+#include <boost/asio/use_awaitable.hpp>
+#include <cstring>  // For std::memcpy
 #include <variant>
+#include <vector>  // For handshake_bytes
 
-#include "boltprotocol/handshake.h"
+#include "boltprotocol/handshake.h"  // For build_handshake_request, parse_handshake_response etc.
 #include "neo4j_bolt_transport/error/neo4j_error_util.h"
 #include "neo4j_bolt_transport/internal/bolt_physical_connection.h"
 
 namespace neo4j_bolt_transport {
     namespace internal {
 
+        // _stage_bolt_handshake (sync) - (保持不变)
         boltprotocol::BoltError BoltPhysicalConnection::_stage_bolt_handshake() {
             InternalState expected_prev_state;
             bool is_ssl = conn_config_.encryption_enabled;
@@ -51,6 +59,7 @@ namespace neo4j_bolt_transport {
             }
 
             boltprotocol::BoltError err;
+            // perform_handshake template will handle if stream is tcp::iostream or ssl::stream
             if (is_ssl) {
                 err = boltprotocol::perform_handshake(*ssl_stream_sync_, proposed_versions, negotiated_bolt_version_);
             } else {
@@ -70,12 +79,13 @@ namespace neo4j_bolt_transport {
             return boltprotocol::BoltError::SUCCESS;
         }
 
-        boost::asio::awaitable<boltprotocol::BoltError> BoltPhysicalConnection::_stage_bolt_handshake_async(std::variant<boost::asio::ip::tcp::socket*, boost::asio::ssl::stream<boost::asio::ip::tcp::socket>*>& async_stream_variant_ref, std::chrono::milliseconds timeout) {
+        // _stage_bolt_handshake_async (async)
+        boost::asio::awaitable<boltprotocol::BoltError> BoltPhysicalConnection::_stage_bolt_handshake_async(std::variant<boost::asio::ip::tcp::socket*, boost::asio::ssl::stream<boost::asio::ip::tcp::socket>*>& async_stream_variant_ref,
+                                                                                                            std::chrono::milliseconds timeout /* timeout not directly used here, but by underlying IO ops */) {
+            // ... (state checks and proposed_versions logic remains the same as Batch 11) ...
             bool is_ssl_stream = std::holds_alternative<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>*>(async_stream_variant_ref);
             InternalState expected_prev_state = is_ssl_stream ? InternalState::SSL_HANDSHAKEN : InternalState::TCP_CONNECTED;
-
             InternalState current_s = current_state_.load(std::memory_order_relaxed);
-            // Allow if just finished async SSL HS or async TCP connect, or if already in correct pre-state
             bool correct_prev_state = (current_s == expected_prev_state) || (is_ssl_stream && current_s == InternalState::ASYNC_SSL_HANDSHAKING) || (!is_ssl_stream && current_s == InternalState::ASYNC_TCP_CONNECTING);
 
             if (!correct_prev_state) {
@@ -86,37 +96,33 @@ namespace neo4j_bolt_transport {
             }
 
             current_state_.store(InternalState::ASYNC_BOLT_HANDSHAKING, std::memory_order_relaxed);
-            if (logger_) logger_->debug("[ConnBoltHSAsync {}] Performing (async) Bolt handshake. Timeout: {}ms", get_id_for_logging(), timeout.count());
+            if (logger_) logger_->debug("[ConnBoltHSAsync {}] Performing (async) Bolt handshake. Configured timeout for IO: {}ms", get_id_for_logging(), conn_config_.bolt_handshake_timeout_ms);  // Use configured timeout
 
-            std::vector<boltprotocol::versions::Version> proposed_versions;
+            std::vector<boltprotocol::versions::Version> proposed_versions_list;  // Renamed to avoid conflict
             if (conn_config_.preferred_bolt_versions.has_value() && !conn_config_.preferred_bolt_versions.value().empty()) {
-                proposed_versions = conn_config_.preferred_bolt_versions.value();
+                proposed_versions_list = conn_config_.preferred_bolt_versions.value();
             } else {
-                proposed_versions = boltprotocol::versions::get_default_proposed_versions();
+                proposed_versions_list = boltprotocol::versions::get_default_proposed_versions();
             }
 
-            if (proposed_versions.empty()) {
+            if (proposed_versions_list.empty()) {
                 mark_as_defunct_from_async(boltprotocol::BoltError::INVALID_ARGUMENT, "No Bolt versions to propose for async handshake.");
                 if (logger_) logger_->error("[ConnBoltHSAsync {}] No Bolt versions to propose.", get_id_for_logging());
                 co_return last_error_code_;
             }
 
-            std::vector<uint8_t> handshake_bytes;
-            handshake_bytes.push_back(0x60);
-            handshake_bytes.push_back(0x60);
-            handshake_bytes.push_back(0xB0);
-            handshake_bytes.push_back(0x17);
-            for (const auto& version : proposed_versions) {
-                handshake_bytes.push_back(version.minor);
-                handshake_bytes.push_back(version.major);
-                handshake_bytes.push_back(0);
-                handshake_bytes.push_back(0);
+            std::array<uint8_t, boltprotocol::HANDSHAKE_REQUEST_SIZE_BYTES> handshake_request_bytes_arr;  // Use std::array
+            boltprotocol::BoltError build_err = boltprotocol::build_handshake_request(proposed_versions_list, handshake_request_bytes_arr);
+            if (build_err != boltprotocol::BoltError::SUCCESS) {
+                mark_as_defunct_from_async(build_err, "Failed to build async handshake request.");
+                if (logger_) logger_->error("[ConnBoltHSAsync {}] Build handshake request failed: {}", get_id_for_logging(), static_cast<int>(build_err));
+                co_return last_error_code_;
             }
-            while (handshake_bytes.size() < 20) {
-                handshake_bytes.push_back(0);
-            }
+            // Convert std::array to std::vector for _write_to_active_async_stream
+            std::vector<uint8_t> handshake_request_vec(handshake_request_bytes_arr.begin(), handshake_request_bytes_arr.end());
 
-            boltprotocol::BoltError err = co_await _write_to_active_async_stream(async_stream_variant_ref, handshake_bytes);
+            // Use 'this->' to call the instance member
+            boltprotocol::BoltError err = co_await this->_write_to_active_async_stream(async_stream_variant_ref, handshake_request_vec);
             if (err != boltprotocol::BoltError::SUCCESS) {
                 std::string msg = "Async Bolt handshake: failed to send proposed versions: " + error::bolt_error_to_string(err);
                 // _write_to_active_async_stream calls mark_as_defunct_from_async
@@ -124,50 +130,36 @@ namespace neo4j_bolt_transport {
                 co_return last_error_code_;
             }
 
-            auto [read_err, negotiated_version_bytes] = co_await _read_from_active_async_stream(async_stream_variant_ref, 4);
+            // Use 'this->' to call the instance member
+            auto [read_err, negotiated_version_bytes_vec] = co_await this->_read_from_active_async_stream(async_stream_variant_ref, boltprotocol::HANDSHAKE_RESPONSE_SIZE_BYTES);
             if (read_err != boltprotocol::BoltError::SUCCESS) {
                 std::string msg = "Async Bolt handshake: failed to read negotiated version: " + error::bolt_error_to_string(read_err);
                 if (logger_) logger_->error("[ConnBoltHSAsync {}] {}", get_id_for_logging(), msg);
                 co_return last_error_code_;
             }
 
-            if (negotiated_version_bytes.size() != 4) {
-                std::string msg = "Async Bolt handshake: received incorrect size for negotiated version.";
+            // Convert std::vector to std::array for parse_handshake_response
+            if (negotiated_version_bytes_vec.size() != boltprotocol::HANDSHAKE_RESPONSE_SIZE_BYTES) {
+                std::string msg = "Async Bolt handshake: received incorrect size for negotiated version bytes.";
                 mark_as_defunct_from_async(boltprotocol::BoltError::INVALID_MESSAGE_FORMAT, msg);
                 if (logger_) logger_->error("[ConnBoltHSAsync {}] {}", get_id_for_logging(), msg);
                 co_return last_error_code_;
             }
+            std::array<uint8_t, boltprotocol::HANDSHAKE_RESPONSE_SIZE_BYTES> negotiated_version_bytes_arr;
+            std::memcpy(negotiated_version_bytes_arr.data(), negotiated_version_bytes_vec.data(), boltprotocol::HANDSHAKE_RESPONSE_SIZE_BYTES);
 
-            // Assuming Version struct does not have patch member, as per previous clarification.
-            negotiated_bolt_version_.minor = negotiated_version_bytes[1];
-            negotiated_bolt_version_.major = negotiated_version_bytes[0];
-            // negotiated_bolt_version_.patch = 0; // No patch field
-
-            bool version_supported = false;
-            for (const auto& proposed : proposed_versions) {
-                if (proposed.major == negotiated_bolt_version_.major && proposed.minor == negotiated_bolt_version_.minor) {
-                    version_supported = true;
-                    break;
-                }
-            }
-
-            if (negotiated_bolt_version_.major == 0 && negotiated_bolt_version_.minor == 0) {
-                std::string msg = "Async Bolt handshake: Server rejected all proposed Bolt versions (responded with 0.0).";
-                mark_as_defunct_from_async(boltprotocol::BoltError::UNSUPPORTED_PROTOCOL_VERSION, msg);
-                if (logger_) logger_->error("[ConnBoltHSAsync {}] {}", get_id_for_logging(), msg);
-                co_return last_error_code_;
-            }
-
-            if (!version_supported) {
-                std::string msg = "Async Bolt handshake: Server chose an unsupported Bolt version: " + negotiated_bolt_version_.to_string();
-                mark_as_defunct_from_async(boltprotocol::BoltError::UNSUPPORTED_PROTOCOL_VERSION, msg);
+            boltprotocol::BoltError parse_err = boltprotocol::parse_handshake_response(negotiated_version_bytes_arr, negotiated_bolt_version_);  // Store in this->negotiated_bolt_version_
+            if (parse_err != boltprotocol::BoltError::SUCCESS) {
+                std::string msg = "Async Bolt handshake: failed to parse server response: " + error::bolt_error_to_string(parse_err);
+                mark_as_defunct_from_async(parse_err, msg);
                 if (logger_) logger_->error("[ConnBoltHSAsync {}] {}", get_id_for_logging(), msg);
                 co_return last_error_code_;
             }
 
             if (logger_) logger_->debug("[ConnBoltHSAsync {}] Async Bolt handshake successful. Negotiated version: {}.{}", get_id_for_logging(), (int)negotiated_bolt_version_.major, (int)negotiated_bolt_version_.minor);
-            current_state_.store(InternalState::ASYNC_BOLT_HANDSHAKEN);  // Corrected enum member was added
-            last_error_code_ = boltprotocol::BoltError::SUCCESS;
+            current_state_.store(InternalState::ASYNC_BOLT_HANDSHAKEN);
+            last_error_code_ = boltprotocol::BoltError::SUCCESS;  // Clear previous errors from this instance
+            last_error_message_.clear();
             co_return boltprotocol::BoltError::SUCCESS;
         }
 
