@@ -11,7 +11,7 @@
 
 #include "auth_token.h"
 #include "boltprotocol/message_defs.h"
-#include "neo4j_bolt_transport/routing/server_address.h"  // <--- NEW
+#include "neo4j_bolt_transport/routing/server_address.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
 #include "spdlog/spdlog.h"
 
@@ -38,46 +38,50 @@ namespace neo4j_bolt_transport {
             bool hostname_verification_enabled = true;
 
             std::size_t max_connection_pool_size = 100;
-            uint32_t connection_acquisition_timeout_ms = 60000;
-            uint32_t max_connection_lifetime_ms = 3600000;
-            uint32_t idle_timeout_ms = 600000;  // Renamed from idle_connection_timeout_ms for consistency
-            uint32_t idle_time_before_health_check_ms = 30000;
+            uint32_t connection_acquisition_timeout_ms = 60000;  // Timeout for acquiring a connection from the pool
+            uint32_t max_connection_lifetime_ms = 3600000;       // Max lifetime of a pooled connection
+            uint32_t idle_timeout_ms = 600000;                   // Max idle time for a pooled connection
+            uint32_t idle_time_before_health_check_ms = 30000;   // Idle time after which a health check (ping) is performed before reuse
 
-            uint32_t tcp_connect_timeout_ms = 5000;
+            // Socket level timeouts
+            uint32_t tcp_connect_timeout_ms = 5000;  // Timeout for establishing the TCP connection
+            uint32_t socket_read_timeout_ms = 0;     // Timeout for socket read operations (0 = system default/infinite)
+            uint32_t socket_write_timeout_ms = 0;    // Timeout for socket write operations (0 = system default/infinite)
             bool tcp_keep_alive_enabled = true;
-            bool tcp_no_delay_enabled = true;  // <--- NEW (TCP_NODELAY)
+            bool tcp_no_delay_enabled = true;
 
-            uint32_t max_transaction_retry_time_ms = 30000;
+            // Bolt protocol level timeouts
+            uint32_t hello_timeout_ms = 15000;   // Timeout for HELLO message exchange
+            uint32_t goodbye_timeout_ms = 5000;  // Timeout for GOODBYE message exchange (if sent)
+
+            // Transaction related configurations
+            uint32_t max_transaction_retry_time_ms = 30000;  // Max total time for retrying a managed transaction
             uint32_t transaction_retry_delay_initial_ms = 1000;
-            uint32_t transaction_retry_delay_multiplier = 2;  // Keep as int, cast to double if needed
+            uint32_t transaction_retry_delay_multiplier = 2;
             uint32_t transaction_retry_delay_max_ms = 60000;
+            uint32_t explicit_transaction_timeout_default_ms = 0;  // Default timeout for explicit transactions if not specified per-transaction (0 = server default)
 
             // --- Routing ---
-            bool client_side_routing_enabled = true;  // Default to true if scheme allows
+            bool client_side_routing_enabled = true;
             uint32_t routing_table_refresh_ttl_margin_ms = 5000;
-            uint32_t routing_max_retry_attempts = 3;                                                       // Retries for fetching routing table
-            std::function<routing::ServerAddress(const routing::ServerAddress&)> server_address_resolver;  // <--- NEW (Custom resolver)
-            // Map of initial router addresses. Keyed by context (e.g. initial URI authority)
-            // This allows different sets of initial routers if the driver instance is used for multiple clusters.
-            // For simpler single-cluster use, it might just contain one entry.
-            std::map<std::string, std::vector<routing::ServerAddress>> initial_router_addresses_override;  // <--- NEW (Advanced: To override URI parsing for initial routers)
+            uint32_t routing_max_retry_attempts = 3;
+            std::function<routing::ServerAddress(const routing::ServerAddress&)> server_address_resolver;
+            std::map<std::string, std::vector<routing::ServerAddress>> initial_router_addresses_override;
 
             // --- Bolt Protocol ---
-            std::vector<boltprotocol::versions::Version> preferred_bolt_versions;  // <--- NEW
+            std::vector<boltprotocol::versions::Version> preferred_bolt_versions;
 
             // --- Logging ---
             std::shared_ptr<spdlog::logger> logger;
             spdlog::level::level_enum log_level = spdlog::level::info;
 
-            TransportConfig(const std::string& uri_str = "bolt://localhost:7687");  // Default constructor if no URI
-            TransportConfig();                                                      // Explicit default constructor
+            TransportConfig(const std::string& uri_str = "bolt://localhost:7687");
+            TransportConfig();
 
             boltprotocol::BoltError apply_parsed_uri_settings(const uri::ParsedUri& parsed_uri);
-            void prepare_agent_strings(const std::string& default_transport_name_version = "Neo4jBoltTransportCpp/0.5.0");  // Version bump
+            void prepare_agent_strings(const std::string& default_transport_name_version = "Neo4jBoltTransportCpp/0.6.0");  // Version bump
 
             std::shared_ptr<spdlog::logger> get_or_create_logger(const std::string& logger_name = "Neo4jBoltTransport");
-
-            // Builder pattern might be useful here eventually
         };
 
     }  // namespace config

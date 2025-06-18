@@ -1,16 +1,18 @@
-#include <iostream>  // 调试用
-#include <utility>   // For std::move
+#include <iostream>
+#include <utility>
 
-#include "boltprotocol/message_serialization.h"  // For serialize_..._message
-#include "boltprotocol/packstream_writer.h"      // For PackStreamWriter
+#include "boltprotocol/message_serialization.h"
+#include "boltprotocol/packstream_writer.h"
 #include "neo4j_bolt_transport/error/neo4j_error_util.h"
+#include "neo4j_bolt_transport/internal/bolt_physical_connection.h"
 #include "neo4j_bolt_transport/session_handle.h"
 
 namespace neo4j_bolt_transport {
 
     std::pair<boltprotocol::BoltError, std::string> SessionHandle::_prepare_auto_commit_run(const std::string& cypher,
                                                                                             const std::map<std::string, boltprotocol::Value>& parameters,
-                                                                                            const std::optional<std::map<std::string, boltprotocol::Value>>& tx_metadata,  // For auto-commit, this is tx_metadata for the implicit transaction
+                                                                                            const std::optional<std::map<std::string, boltprotocol::Value>>& tx_metadata,
+                                                                                            const std::optional<std::chrono::milliseconds>& tx_timeout,
                                                                                             boltprotocol::SuccessMessageParams& out_run_summary_raw,
                                                                                             boltprotocol::FailureMessageParams& out_failure_details_raw) {
         std::pair<boltprotocol::BoltError, std::string> conn_err_pair;
@@ -27,46 +29,19 @@ namespace neo4j_bolt_transport {
         if (session_params_.database_name.has_value()) run_p.db = session_params_.database_name;
         if (session_params_.impersonated_user.has_value()) run_p.imp_user = session_params_.impersonated_user;
 
-        // Access mode for auto-commit (Bolt < 5.0)
+        // Compare with a constructed Version object for Bolt 5.0
         if (conn->get_bolt_version() < boltprotocol::versions::Version(5, 0)) {
             if (session_params_.default_access_mode == config::AccessMode::READ) {
                 run_p.mode = "r";
             }
-            // WRITE is default, so no explicit "w"
         }
-        // For Bolt 5.0+, access mode for auto-commit is implicit or server default.
-        // If specific mode is needed, explicit transaction is preferred.
 
-        // Transaction metadata and timeout for the implicit transaction of RUN
         if (tx_metadata.has_value()) {
-            run_p.tx_metadata = *tx_metadata;
+            run_p.tx_metadata = tx_metadata.value();
         }
-        // Apply session-configured default timeout if no override and applicable
-        // Note: The RunMessageParams struct in bolt_message_params.h currently has tx_timeout.
-        // The Bolt spec details that tx_timeout in RUN is for the implicit transaction.
-        // This seems correct. tx_timeout is not part of SessionParameters directly,
-        // but can be passed via tx_metadata_override in run_query.
-        // If a global default tx_timeout for auto-commit is desired, it should be part of SessionParameters or TransportConfig.
-        // For now, we assume tx_timeout is only passed via tx_metadata_override if present.
-        // If tx_metadata_override has "tx_timeout", use it.
-        // Let's clarify if tx_timeout should be a top-level optional in SessionParameters or RunMessageParams.
-        // Given current structure, if tx_metadata has a 'tx_timeout' key, it would be used.
-        // Let's assume RunMessageParams::tx_timeout is directly settable.
-
-        // If a timeout is specified via a `tx_timeout` key within `tx_metadata` (less common for RUN, more for BEGIN),
-        // or if `RunMessageParams` directly had a `tx_timeout_override` field.
-        // The current `RunMessageParams` has `std::optional<int64_t> tx_timeout;`
-        // So, if `tx_metadata` (the argument to this function) is used to pass a timeout, it should be extracted.
-        // Or, `run_query` should pass a separate timeout parameter.
-        // For now, assume tx_timeout if present in tx_metadata is not standard for RUN.
-        // If a specific tx_timeout is needed for auto-commit, it should be part of RunMessageParams directly.
-        // Let's assume for now `RunMessageParams::tx_timeout` is set if `tx_metadata_override` contained a timeout in `run_query`.
-        // This part needs careful alignment with how `run_query` calls this.
-        // _Current RunMessageParams has `tx_timeout`. So, if run_query's tx_metadata_override is used
-        // to populate run_p.tx_timeout, it's fine. _
-        // _If not, session_params might have a default auto-commit timeout._
-        // This seems like a detail to refine based on desired API for auto-commit timeouts.
-        // For now, rely on RunMessageParams.tx_timeout being populated correctly by the caller if needed.
+        if (tx_timeout.has_value()) {
+            run_p.tx_timeout = static_cast<int64_t>(tx_timeout.value().count());
+        }
 
         std::vector<uint8_t> run_payload_bytes;
         boltprotocol::PackStreamWriter run_writer(run_payload_bytes);
@@ -77,7 +52,10 @@ namespace neo4j_bolt_transport {
             return {err, msg};
         }
 
-        if (logger) logger->trace("[SessionStream {}] Sending auto-commit RUN (no immediate PULL/DISCARD). Cypher: {:.30}", conn->get_id(), cypher);
+        if (logger)
+            logger->trace(
+                "[SessionStream {}] Sending auto-commit RUN. Cypher: {:.30}, Timeout: {}ms, Meta: {}", conn->get_id(), cypher, run_p.tx_timeout.has_value() ? std::to_string(run_p.tx_timeout.value()) : "N/A", run_p.tx_metadata.has_value() && !run_p.tx_metadata.value().empty() ? "Yes" : "No");
+
         err = conn->send_request_receive_summary(run_payload_bytes, out_run_summary_raw, out_failure_details_raw);
 
         if (err != boltprotocol::BoltError::SUCCESS) {
@@ -88,17 +66,10 @@ namespace neo4j_bolt_transport {
         if (conn->get_last_error_code() != boltprotocol::BoltError::SUCCESS) {
             std::string server_fail_detail = error::format_server_failure(out_failure_details_raw);
             std::string msg = error::format_error_message("Auto-commit RUN server failure", conn->get_last_error_code(), server_fail_detail);
-            // Server failure for RUN doesn't always invalidate the *connection*, but the *operation* failed.
-            // The session might still be usable for other queries if the error was statement-specific.
-            // However, _invalidate_session_due_to_connection_error also sets session's connection_is_valid_ to false.
-            // This behavior might be too aggressive for statement errors.
-            // For now, keep it, but consider refining _invalidate_session... for different error types.
             _invalidate_session_due_to_connection_error(conn->get_last_error_code(), msg);
             return {conn->get_last_error_code(), msg};
         }
 
-        // Bookmarks are updated after PULL/DISCARD for auto-commit, not directly after RUN.
-        // The RUN summary might contain `fields` and `qid`.
         if (logger) logger->trace("[SessionStream {}] Auto-commit RUN successful, got its summary.", conn->get_id());
         return {boltprotocol::BoltError::SUCCESS, ""};
     }
@@ -119,8 +90,6 @@ namespace neo4j_bolt_transport {
         boltprotocol::RunMessageParams run_p;
         run_p.cypher_query = cypher;
         run_p.parameters = parameters;
-        // In an explicit transaction, RUN does not include bookmarks, db, imp_user, mode, tx_metadata, or tx_timeout.
-        // These are set during BEGIN.
 
         std::vector<uint8_t> run_payload_bytes;
         boltprotocol::PackStreamWriter run_w(run_payload_bytes);
@@ -142,25 +111,22 @@ namespace neo4j_bolt_transport {
 
         if (conn->get_last_error_code() == boltprotocol::BoltError::SUCCESS) {
             current_transaction_query_id_.reset();
-            if (!(conn->get_bolt_version() < boltprotocol::versions::Version(4, 0))) {  // Bolt 4.0+
+            // Compare with a constructed Version object for Bolt 4.0
+            if (!(conn->get_bolt_version() < boltprotocol::versions::Version(4, 0))) {  // If Bolt version is >= 4.0
                 auto it_qid = out_run_summary_raw.metadata.find("qid");
                 if (it_qid != out_run_summary_raw.metadata.end() && std::holds_alternative<int64_t>(it_qid->second)) {
                     current_transaction_query_id_ = std::get<int64_t>(it_qid->second);
                     if (logger) logger->trace("[SessionStream {}] Explicit TX RUN successful, qid: {}.", conn->get_id(), *current_transaction_query_id_);
                 } else {
-                    std::string msg = "Missing qid in RUN SUCCESS for explicit transaction (Bolt >= 4.0).";
-                    _invalidate_session_due_to_connection_error(boltprotocol::BoltError::INVALID_MESSAGE_FORMAT, msg);
-                    return {boltprotocol::BoltError::INVALID_MESSAGE_FORMAT, msg};
+                    if (logger) logger->warn("[SessionStream {}] Missing qid in RUN SUCCESS for explicit transaction (Bolt version {}.{}). Subsequent PULL/DISCARD may need to be implicit.", conn->get_id(), (int)conn->get_bolt_version().major, (int)conn->get_bolt_version().minor);
                 }
-            } else {  // Bolt < 4.0
+            } else {
                 if (logger) logger->trace("[SessionStream {}] Explicit TX RUN successful (Bolt < 4.0, no qid expected from RUN).", conn->get_id());
             }
             return {boltprotocol::BoltError::SUCCESS, ""};
-        } else {  // Server returned FAILURE for RUN
+        } else {
             std::string server_fail_detail = error::format_server_failure(out_failure_details_raw);
             std::string msg = error::format_error_message("Explicit TX RUN server failure", conn->get_last_error_code(), server_fail_detail);
-            // Similar to auto-commit, server failure for RUN might not invalidate the whole connection/transaction
-            // if it's a statement error. But _invalidate_session_due_to_connection_error is currently aggressive.
             _invalidate_session_due_to_connection_error(conn->get_last_error_code(), msg);
             return {conn->get_last_error_code(), msg};
         }
@@ -187,7 +153,7 @@ namespace neo4j_bolt_transport {
             return {err, msg};
         }
 
-        if (logger) logger->trace("[SessionStream {}] Sending PULL (n={}, qid={}).", conn->get_id(), n, qid.has_value() ? std::to_string(qid.value()) : "none");
+        if (logger) logger->trace("[SessionStream {}] Sending PULL (n={}, qid={}).", conn->get_id(), n, qid.has_value() ? std::to_string(qid.value()) : "implicit");
 
         boltprotocol::FailureMessageParams failure_details_raw;
 
@@ -211,15 +177,13 @@ namespace neo4j_bolt_transport {
         }
 
         if (conn->get_last_error_code() == boltprotocol::BoltError::SUCCESS) {
-            // PULL successful, records are in out_records, summary in out_pull_summary_raw
-            // Update bookmarks only if NOT in an explicit transaction
             if (!is_in_transaction()) {
                 auto it_bookmark = out_pull_summary_raw.metadata.find("bookmark");
                 if (it_bookmark != out_pull_summary_raw.metadata.end() && std::holds_alternative<std::string>(it_bookmark->second)) {
                     update_bookmarks({std::get<std::string>(it_bookmark->second)});
                     if (logger) logger->trace("[SessionStream {}] Bookmarks updated after PULL: {}", conn->get_id(), std::get<std::string>(it_bookmark->second));
                 } else {
-                    update_bookmarks({});  // Clear bookmarks if not returned
+                    update_bookmarks({});
                     if (logger) logger->trace("[SessionStream {}] No bookmark returned after PULL, bookmarks cleared.", conn->get_id());
                 }
             }
@@ -232,7 +196,7 @@ namespace neo4j_bolt_transport {
                 logger->trace("[SessionStream {}] PULL successful. Records received: {}. HasMore: {}", conn->get_id(), out_records.size(), has_more);
             }
             return {boltprotocol::BoltError::SUCCESS, ""};
-        } else {  // Server returned FAILURE for PULL
+        } else {
             std::string server_fail_detail = error::format_server_failure(failure_details_raw);
             std::string msg = error::format_error_message("PULL server failure", conn->get_last_error_code(), server_fail_detail);
             _invalidate_session_due_to_connection_error(conn->get_last_error_code(), msg);
@@ -261,7 +225,7 @@ namespace neo4j_bolt_transport {
             return {err, msg};
         }
 
-        if (logger) logger->trace("[SessionStream {}] Sending DISCARD (n={}, qid={}).", conn->get_id(), n, qid.has_value() ? std::to_string(qid.value()) : "none");
+        if (logger) logger->trace("[SessionStream {}] Sending DISCARD (n={}, qid={}).", conn->get_id(), n, qid.has_value() ? std::to_string(qid.value()) : "implicit");
 
         boltprotocol::FailureMessageParams failure_details_raw;
         err = conn->send_request_receive_summary(discard_payload_bytes, out_discard_summary_raw, failure_details_raw);
@@ -273,8 +237,6 @@ namespace neo4j_bolt_transport {
         }
 
         if (conn->get_last_error_code() == boltprotocol::BoltError::SUCCESS) {
-            // DISCARD successful, summary in out_discard_summary_raw
-            // Update bookmarks only if NOT in an explicit transaction
             if (!is_in_transaction()) {
                 auto it_bookmark = out_discard_summary_raw.metadata.find("bookmark");
                 if (it_bookmark != out_discard_summary_raw.metadata.end() && std::holds_alternative<std::string>(it_bookmark->second)) {
@@ -287,7 +249,7 @@ namespace neo4j_bolt_transport {
             }
             if (logger) logger->trace("[SessionStream {}] DISCARD successful.", conn->get_id());
             return {boltprotocol::BoltError::SUCCESS, ""};
-        } else {  // Server returned FAILURE for DISCARD
+        } else {
             std::string server_fail_detail = error::format_server_failure(failure_details_raw);
             std::string msg = error::format_error_message("DISCARD server failure", conn->get_last_error_code(), server_fail_detail);
             _invalidate_session_due_to_connection_error(conn->get_last_error_code(), msg);

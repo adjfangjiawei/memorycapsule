@@ -10,7 +10,6 @@
 namespace neo4j_bolt_transport {
     namespace internal {
 
-        // _peek_message_tag: 查看反序列化前响应负载中的消息标签
         boltprotocol::BoltError BoltPhysicalConnection::_peek_message_tag(const std::vector<uint8_t>& payload, boltprotocol::MessageTag& out_tag) const {
             if (payload.empty()) {
                 return boltprotocol::BoltError::INVALID_MESSAGE_FORMAT;
@@ -27,7 +26,6 @@ namespace neo4j_bolt_transport {
             return boltprotocol::BoltError::SUCCESS;
         }
 
-        // send_request_receive_summary: 发送请求并期望单个摘要响应 (SUCCESS, FAILURE, IGNORED)
         boltprotocol::BoltError BoltPhysicalConnection::send_request_receive_summary(const std::vector<uint8_t>& request_payload, boltprotocol::SuccessMessageParams& out_summary, boltprotocol::FailureMessageParams& out_failure) {
             out_summary.metadata.clear();
             out_failure.metadata.clear();
@@ -39,18 +37,18 @@ namespace neo4j_bolt_transport {
             }
             mark_as_used();
 
-            boltprotocol::BoltError err = _send_chunked_payload(request_payload);
+            boltprotocol::BoltError err = _send_chunked_payload_sync(request_payload);
             if (err != boltprotocol::BoltError::SUCCESS) {
-                return last_error_code_;
+                return last_error_code_;  // _send_chunked_payload_sync calls _mark_as_defunct_internal
             }
 
             current_state_.store(InternalState::AWAITING_SUMMARY, std::memory_order_relaxed);
 
             std::vector<uint8_t> response_payload;
             while (true) {
-                err = _receive_chunked_payload(response_payload);
+                err = _receive_chunked_payload_sync(response_payload);
                 if (err != boltprotocol::BoltError::SUCCESS) {
-                    return last_error_code_;
+                    return last_error_code_;  // _receive_chunked_payload_sync calls _mark_as_defunct_internal
                 }
                 if (!response_payload.empty()) break;
                 if (logger_) logger_->trace("[ConnMsg {}] Received NOOP while awaiting summary.", id_);
@@ -59,7 +57,7 @@ namespace neo4j_bolt_transport {
             boltprotocol::MessageTag tag;
             err = _peek_message_tag(response_payload, tag);
             if (err != boltprotocol::BoltError::SUCCESS) {
-                _mark_as_defunct(err, "Failed to peek tag for summary response.");
+                _mark_as_defunct_internal(err, "Failed to peek tag for summary response.");  // 使用 internal
                 return last_error_code_;
             }
 
@@ -67,7 +65,7 @@ namespace neo4j_bolt_transport {
             if (tag == boltprotocol::MessageTag::SUCCESS) {
                 err = boltprotocol::deserialize_success_message(reader, out_summary);
                 if (err != boltprotocol::BoltError::SUCCESS) {
-                    _mark_as_defunct(err, "Failed to deserialize SUCCESS summary.");
+                    _mark_as_defunct_internal(err, "Failed to deserialize SUCCESS summary.");  // 使用 internal
                     return last_error_code_;
                 }
                 if (current_state_.load(std::memory_order_relaxed) == InternalState::AWAITING_SUMMARY) {
@@ -80,27 +78,26 @@ namespace neo4j_bolt_transport {
             } else if (tag == boltprotocol::MessageTag::FAILURE) {
                 err = boltprotocol::deserialize_failure_message(reader, out_failure);
                 if (err != boltprotocol::BoltError::SUCCESS) {
-                    _mark_as_defunct(err, "Failed to deserialize FAILURE summary.");
+                    _mark_as_defunct_internal(err, "Failed to deserialize FAILURE summary.");  // 使用 internal
                     return last_error_code_;
                 }
-                return _classify_and_set_server_failure(out_failure);
+                return _classify_and_set_server_failure(out_failure);  // This handles defunct state
 
             } else if (tag == boltprotocol::MessageTag::IGNORED) {
-                err = boltprotocol::deserialize_ignored_message(reader);
+                err = boltprotocol::deserialize_ignored_message(reader);  // Assuming this exists
                 if (err != boltprotocol::BoltError::SUCCESS) {
-                    _mark_as_defunct(err, "Failed to deserialize IGNORED summary.");
+                    _mark_as_defunct_internal(err, "Failed to deserialize IGNORED summary.");  // 使用 internal
                     return last_error_code_;
                 }
                 out_failure.metadata.clear();
-                out_failure.metadata["code"] = boltprotocol::Value("Neo.ClientError.Request.Ignored");
+                out_failure.metadata["code"] = boltprotocol::Value("Neo.ClientError.Request.Ignored");  // Example
                 out_failure.metadata["message"] = boltprotocol::Value("Request was ignored by the server.");
                 current_state_.store(InternalState::FAILED_SERVER_REPORTED, std::memory_order_relaxed);
-                last_error_code_ = boltprotocol::BoltError::SUCCESS;
+                last_error_code_ = boltprotocol::BoltError::UNKNOWN_ERROR;  // Or a specific IGNORED code if added
                 last_error_message_ = "Operation ignored by server.";
-                return boltprotocol::BoltError::SUCCESS;
-
+                return boltprotocol::BoltError::UNKNOWN_ERROR;  // Treat IGNORED as an operational error for summary
             } else {
-                _mark_as_defunct(boltprotocol::BoltError::INVALID_MESSAGE_FORMAT, "Unexpected message tag for summary: " + std::to_string(static_cast<int>(tag)));
+                _mark_as_defunct_internal(boltprotocol::BoltError::INVALID_MESSAGE_FORMAT, "Unexpected message tag for summary: " + std::to_string(static_cast<int>(tag)));  // 使用 internal
                 return last_error_code_;
             }
         }
@@ -115,7 +112,7 @@ namespace neo4j_bolt_transport {
             }
             mark_as_used();
 
-            boltprotocol::BoltError err = _send_chunked_payload(request_payload);
+            boltprotocol::BoltError err = _send_chunked_payload_sync(request_payload);
             if (err != boltprotocol::BoltError::SUCCESS) {
                 return last_error_code_;
             }
@@ -124,7 +121,7 @@ namespace neo4j_bolt_transport {
 
             while (true) {
                 std::vector<uint8_t> response_payload;
-                err = _receive_chunked_payload(response_payload);
+                err = _receive_chunked_payload_sync(response_payload);
                 if (err != boltprotocol::BoltError::SUCCESS) {
                     return last_error_code_;
                 }
@@ -137,7 +134,7 @@ namespace neo4j_bolt_transport {
                 boltprotocol::MessageTag tag;
                 err = _peek_message_tag(response_payload, tag);
                 if (err != boltprotocol::BoltError::SUCCESS) {
-                    _mark_as_defunct(err, "Failed to peek tag during streaming.");
+                    _mark_as_defunct_internal(err, "Failed to peek tag during streaming.");  // 使用 internal
                     return last_error_code_;
                 }
 
@@ -146,11 +143,11 @@ namespace neo4j_bolt_transport {
                         err = record_handler(tag, response_payload, *this);
                         if (err != boltprotocol::BoltError::SUCCESS) {
                             std::string msg = "Record handler returned error: " + error::bolt_error_to_string(err);
-                            _mark_as_defunct(err, msg);
+                            _mark_as_defunct_internal(err, msg);  // 使用 internal
                             return last_error_code_;
                         }
                     } else {
-                        _mark_as_defunct(boltprotocol::BoltError::INVALID_ARGUMENT, "Received RECORD but no handler provided.");
+                        _mark_as_defunct_internal(boltprotocol::BoltError::INVALID_ARGUMENT, "Received RECORD but no handler provided.");  // 使用 internal
                         return last_error_code_;
                     }
                 } else if (tag == boltprotocol::MessageTag::SUCCESS) {
@@ -158,7 +155,7 @@ namespace neo4j_bolt_transport {
                     boltprotocol::PackStreamReader reader(response_payload);
                     err = boltprotocol::deserialize_success_message(reader, out_summary);
                     if (err != boltprotocol::BoltError::SUCCESS) {
-                        _mark_as_defunct(err, "Failed to deserialize SUCCESS summary in stream.");
+                        _mark_as_defunct_internal(err, "Failed to deserialize SUCCESS summary in stream.");  // 使用 internal
                         return last_error_code_;
                     }
                     current_state_.store(InternalState::READY, std::memory_order_relaxed);
@@ -171,7 +168,7 @@ namespace neo4j_bolt_transport {
                     boltprotocol::PackStreamReader reader(response_payload);
                     err = boltprotocol::deserialize_failure_message(reader, out_failure);
                     if (err != boltprotocol::BoltError::SUCCESS) {
-                        _mark_as_defunct(err, "Failed to deserialize FAILURE summary in stream.");
+                        _mark_as_defunct_internal(err, "Failed to deserialize FAILURE summary in stream.");  // 使用 internal
                         return last_error_code_;
                     }
                     return _classify_and_set_server_failure(out_failure);
@@ -179,21 +176,21 @@ namespace neo4j_bolt_transport {
                 } else if (tag == boltprotocol::MessageTag::IGNORED) {
                     current_state_.store(InternalState::AWAITING_SUMMARY, std::memory_order_relaxed);
                     boltprotocol::PackStreamReader reader(response_payload);
-                    err = boltprotocol::deserialize_ignored_message(reader);
+                    err = boltprotocol::deserialize_ignored_message(reader);  // Assuming this exists
                     if (err != boltprotocol::BoltError::SUCCESS) {
-                        _mark_as_defunct(err, "Failed to deserialize IGNORED summary in stream.");
+                        _mark_as_defunct_internal(err, "Failed to deserialize IGNORED summary in stream.");  // 使用 internal
                         return last_error_code_;
                     }
                     out_failure.metadata.clear();
                     out_failure.metadata["code"] = boltprotocol::Value("Neo.ClientError.Request.Ignored");
                     out_failure.metadata["message"] = boltprotocol::Value("Request was ignored by the server.");
                     current_state_.store(InternalState::FAILED_SERVER_REPORTED, std::memory_order_relaxed);
-                    last_error_code_ = boltprotocol::BoltError::SUCCESS;
+                    last_error_code_ = boltprotocol::BoltError::UNKNOWN_ERROR;  // Or a specific IGNORED code if added
                     last_error_message_ = "Operation ignored by server.";
-                    return boltprotocol::BoltError::SUCCESS;
+                    return boltprotocol::BoltError::UNKNOWN_ERROR;
 
                 } else {
-                    _mark_as_defunct(boltprotocol::BoltError::INVALID_MESSAGE_FORMAT, "Unexpected message tag in stream: " + std::to_string(static_cast<int>(tag)));
+                    _mark_as_defunct_internal(boltprotocol::BoltError::INVALID_MESSAGE_FORMAT, "Unexpected message tag in stream: " + std::to_string(static_cast<int>(tag)));  // 使用 internal
                     return last_error_code_;
                 }
             }
@@ -212,7 +209,7 @@ namespace neo4j_bolt_transport {
             boltprotocol::PackStreamWriter writer(reset_payload_bytes);
             boltprotocol::BoltError err = boltprotocol::serialize_reset_message(writer);
             if (err != boltprotocol::BoltError::SUCCESS) {
-                _mark_as_defunct(err, "RESET serialization failed.");
+                _mark_as_defunct_internal(err, "RESET serialization failed.");  // 使用 internal
                 return last_error_code_;
             }
 
@@ -222,31 +219,21 @@ namespace neo4j_bolt_transport {
             err = send_request_receive_summary(reset_payload_bytes, success_meta, failure_meta);
 
             if (err == boltprotocol::BoltError::SUCCESS && last_error_code_ == boltprotocol::BoltError::SUCCESS) {
-                if (current_state_.load(std::memory_order_relaxed) == InternalState::READY) {
-                    if (logger_) logger_->info("[ConnMsg {}] RESET successful. Connection is READY.", id_);
-                    return boltprotocol::BoltError::SUCCESS;
-                } else {
-                    std::string msg = "RESET completed exchange but connection not READY. State: " + _get_current_state_as_string();
-                    if (logger_) logger_->error("[ConnMsg {}] {}", id_, msg);
-                    _mark_as_defunct(boltprotocol::BoltError::UNKNOWN_ERROR, msg);
-                    return last_error_code_;
-                }
+                current_state_.store(InternalState::READY, std::memory_order_relaxed);
+                if (logger_) logger_->info("[ConnMsg {}] RESET successful. Connection is READY.", id_);
+                return boltprotocol::BoltError::SUCCESS;
             } else {
-                if (logger_) logger_->error("[ConnMsg {}] RESET failed. Error: {}, Msg: {}", id_, static_cast<int>(last_error_code_), last_error_message_);
+                // send_request_receive_summary already handles defunct state
+                if (logger_) logger_->error("[ConnMsg {}] RESET failed. Error: {}, Last Conn Error Code: {}, Msg: {}", id_, static_cast<int>(err), static_cast<int>(last_error_code_), last_error_message_);
                 return last_error_code_;
             }
         }
 
-        boltprotocol::BoltError BoltPhysicalConnection::ping(std::chrono::milliseconds /*timeout_placeholder*/) {
-            // PING 通常通过发送 RESET 并期望成功来实现
-            // 超时主要应用于网络操作，这里的 RESET 调用 send_request_receive_summary，
-            // 而后者内部的网络操作（_send_chunked_payload, _receive_chunked_payload）
-            // 目前没有显式的超时控制（依赖于底层的TCP超时）。
-            // 如果要实现严格的 PING 超时，需要在 send_request_receive_summary 中加入超时机制，
-            // 或者在调用 RESET 之前/之后设置一个定时器来中断操作（这对于同步代码来说比较复杂）。
-            if (logger_) logger_->debug("[ConnMsg {}] Pinging connection (via RESET)...", id_);
-            return perform_reset();
-        }
+        // ping is an alias for perform_reset
+        // boltprotocol::BoltError BoltPhysicalConnection::ping(std::chrono::milliseconds /*timeout_placeholder*/) {
+        //     if (logger_) logger_->debug("[ConnMsg {}] Pinging connection (via RESET)...", id_);
+        //     return perform_reset();
+        // }
 
     }  // namespace internal
 }  // namespace neo4j_bolt_transport
