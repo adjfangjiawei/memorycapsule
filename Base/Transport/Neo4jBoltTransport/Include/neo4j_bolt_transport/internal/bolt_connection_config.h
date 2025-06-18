@@ -6,17 +6,17 @@
 #include <string>
 #include <vector>
 
-#include "boltprotocol/message_defs.h"                     // For Value, Version
-#include "neo4j_bolt_transport/config/transport_config.h"  // For AuthTokenVariant, EncryptionStrategy
+#include "boltprotocol/message_defs.h"
+#include "neo4j_bolt_transport/config/transport_config.h"
 
 namespace neo4j_bolt_transport {
     namespace internal {
 
         struct BoltConnectionConfig {
             std::string target_host;
-            uint16_t target_port;
+            uint16_t target_port = 0;  // Default port to 0
 
-            config::AuthTokenVariant auth_token;
+            config::AuthTokenVariant auth_token;  // Default constructs if AuthTokenVariant can
             std::string user_agent_for_hello;
             boltprotocol::HelloMessageParams::BoltAgentInfo bolt_agent_info_for_hello;
 
@@ -29,16 +29,19 @@ namespace neo4j_bolt_transport {
             bool hostname_verification_enabled = true;
 
             uint32_t tcp_connect_timeout_ms = 5000;
-            uint32_t socket_read_timeout_ms = 0;   // Added
-            uint32_t socket_write_timeout_ms = 0;  // Added
+            uint32_t socket_read_timeout_ms = 0;
+            uint32_t socket_write_timeout_ms = 0;
             bool socket_keep_alive_enabled = true;
             bool tcp_no_delay_enabled = true;
             uint32_t bolt_handshake_timeout_ms = 10000;
-            uint32_t hello_timeout_ms = 15000;   // Added
-            uint32_t goodbye_timeout_ms = 5000;  // Added
+            uint32_t hello_timeout_ms = 15000;
+            uint32_t goodbye_timeout_ms = 5000;
 
             std::optional<std::map<std::string, boltprotocol::Value>> hello_routing_context;
             std::optional<std::vector<boltprotocol::versions::Version>> preferred_bolt_versions;
+
+            // Add a default constructor
+            BoltConnectionConfig() = default;
         };
 
     }  // namespace internal
