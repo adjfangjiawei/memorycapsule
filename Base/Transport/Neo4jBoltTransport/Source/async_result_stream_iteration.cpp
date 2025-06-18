@@ -1,4 +1,5 @@
 #include <utility>
+#include <vector>  // For list_all_async
 
 #include "boltprotocol/message_serialization.h"
 #include "boltprotocol/packstream_reader.h"
@@ -11,7 +12,7 @@
 
 namespace neo4j_bolt_transport {
 
-    // --- ensure_records_buffered_async (from previous batch, user has corrected version checks) ---
+    // --- ensure_records_buffered_async (保持不变) ---
     boost::asio::awaitable<std::tuple<boltprotocol::BoltError, std::string, bool>> AsyncResultStream::ensure_records_buffered_async() {
         std::shared_ptr<spdlog::logger> logger = nullptr;
         if (owner_session_ && owner_session_->transport_manager_ && owner_session_->transport_manager_->get_config().logger) {
@@ -69,11 +70,7 @@ namespace neo4j_bolt_transport {
             this->set_failure_state(reason, "Async PULL (buffering) op error: " + message);
         };
 
-        boltprotocol::BoltError send_err = co_await internal::BoltPhysicalConnection::_send_chunked_payload_async_static_helper(*stream_context_,
-                                                                                                                                std::move(pull_payload_bytes),  // Pass by value and move
-                                                                                                                                stream_context_->original_config,
-                                                                                                                                logger,
-                                                                                                                                static_op_error_handler_for_stream_iteration);
+        boltprotocol::BoltError send_err = co_await internal::BoltPhysicalConnection::_send_chunked_payload_async_static_helper(*stream_context_, std::move(pull_payload_bytes), stream_context_->original_config, logger, static_op_error_handler_for_stream_iteration);
 
         if (send_err != boltprotocol::BoltError::SUCCESS) {
             co_return std::make_tuple(failure_reason_.load(std::memory_order_acquire), failure_message_, false);
@@ -155,7 +152,7 @@ namespace neo4j_bolt_transport {
         co_return std::make_tuple(boltprotocol::BoltError::UNKNOWN_ERROR, "ensure_records_buffered_async: Inconsistent state after PULL.", false);
     }
 
-    // --- next_async (from previous batch, user has corrected version checks) ---
+    // --- next_async (保持不变) ---
     boost::asio::awaitable<std::tuple<boltprotocol::BoltError, std::string, std::optional<BoltRecord>>> AsyncResultStream::next_async() {
         auto [err_code, err_msg, has_more_locally] = co_await ensure_records_buffered_async();
 
@@ -173,7 +170,7 @@ namespace neo4j_bolt_transport {
         co_return std::make_tuple(boltprotocol::BoltError::SUCCESS, "", std::make_optional(std::move(record)));
     }
 
-    // --- AsyncResultStream Private Helper: send_discard_async ---
+    // --- send_discard_async (保持不变) ---
     boost::asio::awaitable<boltprotocol::BoltError> AsyncResultStream::send_discard_async(int64_t n, boltprotocol::SuccessMessageParams& out_discard_summary_raw) {
         std::shared_ptr<spdlog::logger> logger = nullptr;
         if (owner_session_ && owner_session_->transport_manager_ && owner_session_->transport_manager_->get_config().logger) {
@@ -181,7 +178,7 @@ namespace neo4j_bolt_transport {
         }
 
         if (!is_open()) {
-            if (logger) logger->warn("[AsyncResultStream {}] send_discard_async on non-open stream.", (void*)this);
+            if (logger) logger->warn("[AsyncResultStream {}] send_discard_async on non-open stream. Failed: {}, Consumed: {}", (void*)this, stream_failed_.load(std::memory_order_acquire), stream_fully_consumed_or_discarded_.load(std::memory_order_acquire));
             co_return failure_reason_.load(std::memory_order_acquire);
         }
 
@@ -193,45 +190,85 @@ namespace neo4j_bolt_transport {
 
         std::vector<uint8_t> discard_payload_bytes;
         boltprotocol::PackStreamWriter writer(discard_payload_bytes);
-        boltprotocol::BoltError err = boltprotocol::serialize_discard_message(discard_p, writer);
-        if (err != boltprotocol::BoltError::SUCCESS) {
-            set_failure_state(err, "Failed to serialize DISCARD message: " + error::bolt_error_to_string(err));
-            co_return err;  // Return the specific serialization error
+        boltprotocol::BoltError serialize_err = boltprotocol::serialize_discard_message(discard_p, writer);
+        if (serialize_err != boltprotocol::BoltError::SUCCESS) {
+            set_failure_state(serialize_err, "Failed to serialize DISCARD message: " + error::bolt_error_to_string(serialize_err));
+            co_return failure_reason_.load(std::memory_order_acquire);
         }
 
         if (logger) logger->trace("[AsyncResultStream {}] Sending DISCARD (n={}, qid={})", (void*)this, n, query_id_ ? std::to_string(*query_id_) : "auto");
 
-        auto static_op_error_handler = [this, logger_copy = logger](boltprotocol::BoltError reason, const std::string& message) {
-            // This sets the stream's failure state if the static operation itself fails
+        auto static_op_error_handler_for_discard = [this, logger_copy = logger](boltprotocol::BoltError reason, const std::string& message) {
             this->set_failure_state(reason, "Async DISCARD operation error: " + message);
         };
 
-        auto [summary_err, discard_result_summary_obj] =  // discard_result_summary_obj is ResultSummary
-            co_await internal::BoltPhysicalConnection::send_request_receive_summary_async_static(*stream_context_, discard_payload_bytes, stream_context_->original_config, logger, static_op_error_handler);
+        boltprotocol::BoltError send_err = co_await internal::BoltPhysicalConnection::_send_chunked_payload_async_static_helper(*stream_context_, std::move(discard_payload_bytes), stream_context_->original_config, logger, static_op_error_handler_for_discard);
 
-        if (summary_err != boltprotocol::BoltError::SUCCESS) {
-            // If send_request_receive_summary_async_static returned an error,
-            // set_failure_state should have been called by static_op_error_handler,
-            // or if the error was directly from send_request_receive_summary_async_static (e.g. initial send failed),
-            // we need to ensure failure state is set.
-            if (!stream_failed_.load(std::memory_order_acquire)) {  // Check if handler already set it
-                                                                    // If the ResultSummary object contains a server failure message (because summary_err might be generic like UNKNOWN_ERROR for server failures)
-                                                                    // we use the message stored by set_failure_state (which should have been called by handler)
-                                                                    // or construct a new one.
-                std::string detail_msg = failure_message_;          // Use already set message if any
-                if (detail_msg.empty()) {
-                    detail_msg = "DISCARD request failed to get summary. Error code: " + std::to_string(static_cast<int>(summary_err));
-                }
-                set_failure_state(summary_err, detail_msg);
-            }
+        if (send_err != boltprotocol::BoltError::SUCCESS) {
             co_return failure_reason_.load(std::memory_order_acquire);
         }
 
-        out_discard_summary_raw = discard_result_summary_obj.raw_params();
-        co_return boltprotocol::BoltError::SUCCESS;
+        bool summary_received = false;
+        boltprotocol::BoltError final_op_status = boltprotocol::BoltError::UNKNOWN_ERROR;
+
+        while (!summary_received) {
+            auto [recv_err, response_payload] = co_await internal::BoltPhysicalConnection::_receive_chunked_payload_async_static_helper(*stream_context_, stream_context_->original_config, logger, static_op_error_handler_for_discard);
+
+            if (recv_err != boltprotocol::BoltError::SUCCESS) {
+                final_op_status = failure_reason_.load(std::memory_order_acquire);
+                break;
+            }
+            if (response_payload.empty()) {
+                if (logger) logger->trace("[AsyncResultStream {}] DISCARD received NOOP.", (void*)this);
+                continue;
+            }
+
+            boltprotocol::MessageTag tag;
+            boltprotocol::PackStreamReader peek_reader_temp(response_payload);
+            uint8_t raw_tag_byte_peek = 0;
+            uint32_t num_fields_peek = 0;
+            boltprotocol::BoltError peek_err = boltprotocol::peek_message_structure_header(peek_reader_temp, raw_tag_byte_peek, num_fields_peek);
+
+            if (peek_err != boltprotocol::BoltError::SUCCESS) {
+                set_failure_state(peek_err, "Failed to peek tag in DISCARD response");
+                final_op_status = failure_reason_.load(std::memory_order_acquire);
+                break;
+            }
+            tag = static_cast<boltprotocol::MessageTag>(raw_tag_byte_peek);
+
+            boltprotocol::PackStreamReader full_reader(response_payload);
+            if (tag == boltprotocol::MessageTag::SUCCESS) {
+                boltprotocol::BoltError deser_err = boltprotocol::deserialize_success_message(full_reader, out_discard_summary_raw);
+                if (deser_err != boltprotocol::BoltError::SUCCESS) {
+                    set_failure_state(deser_err, "Failed to deserialize SUCCESS from DISCARD");
+                    final_op_status = failure_reason_.load(std::memory_order_acquire);
+                } else {
+                    final_op_status = boltprotocol::BoltError::SUCCESS;
+                }
+                summary_received = true;
+            } else if (tag == boltprotocol::MessageTag::FAILURE) {
+                boltprotocol::FailureMessageParams discard_failure_meta;
+                boltprotocol::BoltError deser_err = boltprotocol::deserialize_failure_message(full_reader, discard_failure_meta);
+                if (deser_err != boltprotocol::BoltError::SUCCESS) {
+                    set_failure_state(deser_err, "Failed to deserialize FAILURE from DISCARD");
+                } else {
+                    std::string server_fail_detail = error::format_server_failure(discard_failure_meta);
+                    set_failure_state(boltprotocol::BoltError::UNKNOWN_ERROR, "Server FAILURE during DISCARD: " + server_fail_detail, discard_failure_meta);
+                }
+                final_op_status = failure_reason_.load(std::memory_order_acquire);
+                summary_received = true;
+            } else if (tag == boltprotocol::MessageTag::RECORD) {
+                if (logger) logger->warn("[AsyncResultStream {}] Received unexpected RECORD after DISCARD. Ignoring.", (void*)this);
+            } else {
+                set_failure_state(boltprotocol::BoltError::INVALID_MESSAGE_FORMAT, "Unexpected tag " + std::to_string(static_cast<int>(tag)) + " after DISCARD");
+                final_op_status = failure_reason_.load(std::memory_order_acquire);
+                summary_received = true;
+            }
+        }
+        co_return final_op_status;
     }
 
-    // --- AsyncResultStream Public Method: consume_async ---
+    // --- consume_async (保持不变) ---
     boost::asio::awaitable<std::pair<boltprotocol::BoltError, ResultSummary>> AsyncResultStream::consume_async() {
         std::shared_ptr<spdlog::logger> logger = nullptr;
         if (owner_session_ && owner_session_->transport_manager_ && owner_session_->transport_manager_->get_config().logger) {
@@ -252,7 +289,7 @@ namespace neo4j_bolt_transport {
 
         if (!needs_server_discard_op) {
             stream_fully_consumed_or_discarded_.store(true, std::memory_order_release);
-            if (logger) logger->trace("[AsyncResultStream {}] consume_async: No records on server to discard.", (void*)this);
+            if (logger) logger->trace("[AsyncResultStream {}] consume_async: No records on server to discard. Stream considered consumed.", (void*)this);
             co_return std::make_pair(boltprotocol::BoltError::SUCCESS, final_summary_typed_);
         }
 
@@ -263,7 +300,6 @@ namespace neo4j_bolt_transport {
         stream_fully_consumed_or_discarded_.store(true, std::memory_order_release);
 
         if (discard_op_err != boltprotocol::BoltError::SUCCESS) {
-            // failure_reason_ and failure_message_ should be set by send_discard_async or its handler
             co_return std::make_pair(failure_reason_.load(std::memory_order_acquire), final_summary_typed_);
         }
 
@@ -272,6 +308,98 @@ namespace neo4j_bolt_transport {
 
         if (logger) logger->trace("[AsyncResultStream {}] consume_async successful.", (void*)this);
         co_return std::make_pair(boltprotocol::BoltError::SUCCESS, final_summary_typed_);
+    }
+
+    // --- AsyncResultStream Public Method: single_async (NEW) ---
+    boost::asio::awaitable<std::tuple<boltprotocol::BoltError, std::string, std::optional<BoltRecord>>> AsyncResultStream::single_async() {
+        std::shared_ptr<spdlog::logger> logger = nullptr;
+        if (owner_session_ && owner_session_->transport_manager_ && owner_session_->transport_manager_->get_config().logger) {
+            logger = owner_session_->transport_manager_->get_config().logger;
+        }
+        if (logger) logger->trace("[AsyncResultStream {}] single_async called.", (void*)this);
+
+        auto [err_code_first, err_msg_first, record_opt_first] = co_await next_async();
+
+        if (err_code_first != boltprotocol::BoltError::SUCCESS) {
+            if (logger) logger->warn("[AsyncResultStream {}] single_async: Error fetching first record: {}", (void*)this, err_msg_first);
+            co_return std::make_tuple(err_code_first, std::move(err_msg_first), std::nullopt);
+        }
+        if (!record_opt_first.has_value()) {
+            // Stream was empty, but single() expects exactly one record.
+            std::string msg = "Expected a single record, but the stream was empty.";
+            set_failure_state(boltprotocol::BoltError::INVALID_MESSAGE_FORMAT, msg);  // Or a more specific "NoSuchRecordException" like error
+            if (logger) logger->warn("[AsyncResultStream {}] single_async: {}", (void*)this, msg);
+            co_return std::make_tuple(failure_reason_.load(std::memory_order_acquire), failure_message_, std::nullopt);
+        }
+
+        // Successfully fetched one record. Now check if there are more.
+        auto [err_code_second, err_msg_second, record_opt_second] = co_await next_async();
+
+        if (err_code_second != boltprotocol::BoltError::SUCCESS) {
+            // An error occurred while trying to determine if there's a second record.
+            // This is a problem for the single() contract.
+            std::string msg = "Error checking for subsequent records after fetching one in single_async: " + err_msg_second;
+            set_failure_state(err_code_second, msg);
+            if (logger) logger->warn("[AsyncResultStream {}] single_async: {}", (void*)this, msg);
+            // Return the first record, but also the error? Or just the error?
+            // Java driver would typically throw an exception here.
+            // For now, prioritize reporting the error that occurred during the check.
+            co_return std::make_tuple(failure_reason_.load(std::memory_order_acquire), failure_message_, std::nullopt);  // Discard the first record due to subsequent error
+        }
+
+        if (record_opt_second.has_value()) {
+            // More than one record found. This violates the single() contract.
+            std::string msg = "Expected a single record, but more were found in the stream.";
+            set_failure_state(boltprotocol::BoltError::INVALID_MESSAGE_FORMAT, msg);  // Or a more specific "NonUniqueResultException"
+            if (logger) logger->warn("[AsyncResultStream {}] single_async: {}", (void*)this, msg);
+            // Consume the rest of the stream to leave it in a clean state, then return the error.
+            co_await consume_async();                                                                                    // Discard *all* remaining, including record_opt_second
+            co_return std::make_tuple(failure_reason_.load(std::memory_order_acquire), failure_message_, std::nullopt);  // Return with the error
+        }
+
+        // Exactly one record was found, and the next call to next_async() returned no record and no error.
+        // The stream is now fully consumed.
+        if (logger) logger->trace("[AsyncResultStream {}] single_async successful.", (void*)this);
+        stream_fully_consumed_or_discarded_.store(true, std::memory_order_release);  // Mark as consumed
+        co_return std::make_tuple(boltprotocol::BoltError::SUCCESS, "", std::move(record_opt_first));
+    }
+
+    // --- AsyncResultStream Public Method: list_all_async (NEW) ---
+    boost::asio::awaitable<std::tuple<boltprotocol::BoltError, std::string, std::vector<BoltRecord>>> AsyncResultStream::list_all_async() {
+        std::vector<BoltRecord> all_records;
+        std::shared_ptr<spdlog::logger> logger = nullptr;
+        if (owner_session_ && owner_session_->transport_manager_ && owner_session_->transport_manager_->get_config().logger) {
+            logger = owner_session_->transport_manager_->get_config().logger;
+        }
+        if (logger) logger->trace("[AsyncResultStream {}] list_all_async called.", (void*)this);
+
+        if (stream_failed_.load(std::memory_order_acquire)) {
+            co_return std::make_tuple(failure_reason_.load(std::memory_order_acquire), failure_message_, std::move(all_records));
+        }
+        // If already consumed and buffer is empty, return empty list.
+        if (stream_fully_consumed_or_discarded_.load(std::memory_order_acquire) && raw_record_buffer_.empty()) {
+            co_return std::make_tuple(boltprotocol::BoltError::SUCCESS, "", std::move(all_records));
+        }
+
+        while (true) {
+            auto [err_code, err_msg, record_opt] = co_await next_async();
+            if (err_code != boltprotocol::BoltError::SUCCESS) {
+                if (logger) logger->warn("[AsyncResultStream {}] list_all_async: Error during iteration: {}", (void*)this, err_msg);
+                co_return std::make_tuple(err_code, std::move(err_msg), std::move(all_records));
+            }
+            if (!record_opt.has_value()) {  // End of stream
+                break;
+            }
+            try {
+                all_records.push_back(std::move(*record_opt));
+            } catch (const std::bad_alloc&) {
+                set_failure_state(boltprotocol::BoltError::OUT_OF_MEMORY, "Out of memory while collecting records in list_all_async.");
+                co_return std::make_tuple(failure_reason_.load(std::memory_order_acquire), failure_message_, std::move(all_records));
+            }
+        }
+        // After iterating through all records, next_async will have marked the stream as consumed.
+        if (logger) logger->trace("[AsyncResultStream {}] list_all_async successful. Collected {} records.", (void*)this, all_records.size());
+        co_return std::make_tuple(boltprotocol::BoltError::SUCCESS, "", std::move(all_records));
     }
 
 }  // namespace neo4j_bolt_transport

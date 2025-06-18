@@ -115,6 +115,7 @@ namespace boltprotocol {
         const Version V5_0(5, 0);
         const Version V4_4(4, 4);
         const Version V4_3(4, 3);
+        const Version V3_0(3, 0);
         // Add other versions if they were declared, e.g.:
         // const Version V4_2(4,2);
         // const Version V4_1(4,1);
@@ -124,7 +125,7 @@ namespace boltprotocol {
         // --- Definition for get_default_proposed_versions ---
         const std::vector<Version>& get_default_proposed_versions() {
             static const std::vector<Version> DEFAULT_PROPOSED_VERSIONS_LIST = {
-                V5_4, V5_3, V5_2, V5_1, V5_0, V4_4, V4_3  // Add others if defined and desired
+                V5_4, V5_3, V5_2, V5_1, V5_0, V4_4, V4_3, V3_0  // Add others if defined and desired
             };
             return DEFAULT_PROPOSED_VERSIONS_LIST;
         }

@@ -54,7 +54,7 @@ namespace boltprotocol {
         };
 
         // 声明版本常量
-        extern const Version V5_4, V5_3, V5_2, V5_1, V5_0, V4_4, V4_3;  // 确保 V4_3 也被声明
+        extern const Version V5_4, V5_3, V5_2, V5_1, V5_0, V4_4, V4_3, V3_0;  // 确保 V4_3 也被声明
         // extern const Version V4_2, V4_1, V4_0, V3_0;
 
         // 声明函数以获取默认建议版本

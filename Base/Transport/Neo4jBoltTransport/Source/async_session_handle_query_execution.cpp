@@ -1,7 +1,7 @@
 #include "boltprotocol/message_serialization.h"
 #include "boltprotocol/packstream_reader.h"
 #include "boltprotocol/packstream_writer.h"
-#include "neo4j_bolt_transport/async_result_stream.h"  // Include new AsyncResultStream
+#include "neo4j_bolt_transport/async_result_stream.h"
 #include "neo4j_bolt_transport/async_session_handle.h"
 #include "neo4j_bolt_transport/bolt_record.h"
 #include "neo4j_bolt_transport/error/neo4j_error_util.h"
@@ -10,37 +10,12 @@
 
 namespace neo4j_bolt_transport {
 
-    // _prepare_run_message_params implementation remains the same as in Batch 7
-    boltprotocol::RunMessageParams AsyncSessionHandle::_prepare_run_message_params(const std::string& cypher, const std::map<std::string, boltprotocol::Value>& parameters) {
-        boltprotocol::RunMessageParams run_p;
-        run_p.cypher_query = cypher;
-        run_p.parameters = parameters;
+    // _prepare_run_message_params is now a private member of AsyncSessionHandle, defined in async_session_handle_transaction.cpp
+    // or could be in async_session_handle_query_execution.cpp if only used here.
+    // For now, assume it's accessible or defined in the header if needed by both.
+    // Actually, it was moved to the header in the previous batch.
 
-        if (stream_context_) {
-            if (session_params_.database_name.has_value()) {
-                run_p.db = session_params_.database_name;
-            }
-            if (session_params_.impersonated_user.has_value()) {
-                run_p.imp_user = session_params_.impersonated_user;
-            }
-
-            if (stream_context_->negotiated_bolt_version >= boltprotocol::versions::V5_0) {
-                if (session_params_.default_access_mode == config::AccessMode::READ) {
-                    run_p.mode = "r";
-                }
-            } else {
-                if (session_params_.default_access_mode == config::AccessMode::READ) {
-                    run_p.mode = "r";
-                }
-            }
-            if (transport_manager_ && transport_manager_->get_config().explicit_transaction_timeout_default_ms > 0) {
-                run_p.tx_timeout = static_cast<int64_t>(transport_manager_->get_config().explicit_transaction_timeout_default_ms);
-            }
-        }
-        return run_p;
-    }
-
-    // run_query_async implementation remains the same as in Batch 7
+    // run_query_async implementation (from Batch 7, assuming user has corrected version checks)
     boost::asio::awaitable<std::pair<boltprotocol::BoltError, ResultSummary>> AsyncSessionHandle::run_query_async(const std::string& cypher, const std::map<std::string, boltprotocol::Value>& parameters) {
         std::shared_ptr<spdlog::logger> logger = nullptr;
         if (transport_manager_ && transport_manager_->get_config().logger) {
@@ -97,7 +72,7 @@ namespace neo4j_bolt_transport {
         while (server_has_more) {
             boltprotocol::PullMessageParams pull_params;
             pull_params.n = -1;
-            if (qid_for_pull.has_value() && stream_context_->negotiated_bolt_version >= boltprotocol::versions::V4_3) {
+            if (qid_for_pull.has_value() && (stream_context_->negotiated_bolt_version.major >= 4)) {  // Corrected: Bolt 4.0+ for qid
                 pull_params.qid = qid_for_pull;
             }
             std::vector<uint8_t> pull_payload_bytes;
@@ -111,7 +86,7 @@ namespace neo4j_bolt_transport {
                     last_error_code_,
                     ResultSummary(std::move(final_pull_success_meta), stream_context_->negotiated_bolt_version, stream_context_->utc_patch_active, stream_context_->original_config.target_host + ":" + std::to_string(stream_context_->original_config.target_port), session_params_.database_name));
             }
-            boltprotocol::BoltError send_pull_err = co_await internal::BoltPhysicalConnection::_send_chunked_payload_async_static_helper(*stream_context_, pull_payload_bytes, stream_context_->original_config, logger, static_op_error_handler);
+            boltprotocol::BoltError send_pull_err = co_await internal::BoltPhysicalConnection::_send_chunked_payload_async_static_helper(*stream_context_, std::move(pull_payload_bytes), stream_context_->original_config, logger, static_op_error_handler);
             if (send_pull_err != boltprotocol::BoltError::SUCCESS) {
                 co_return std::make_pair(
                     last_error_code_,
@@ -178,8 +153,8 @@ namespace neo4j_bolt_transport {
                     if (deser_fail_err != boltprotocol::BoltError::SUCCESS) {
                         static_op_error_handler(deser_fail_err, "Failed to deserialize FAILURE from PULL");
                     } else {
-                        std::string server_fail_detail = error::format_server_failure(pull_failure_meta);
-                        static_op_error_handler(boltprotocol::BoltError::UNKNOWN_ERROR, "Server FAILURE during PULL: " + server_fail_detail);
+                        std::string fail_detail = error::format_server_failure(pull_failure_meta);
+                        static_op_error_handler(boltprotocol::BoltError::UNKNOWN_ERROR, "Server FAILURE during PULL: " + fail_detail);
                     }
                     co_return std::make_pair(last_error_code_,
                                              ResultSummary(boltprotocol::SuccessMessageParams{std::move(pull_failure_meta.metadata)},
@@ -202,7 +177,7 @@ namespace neo4j_bolt_transport {
         co_return std::make_pair(boltprotocol::BoltError::SUCCESS, std::move(final_summary_obj));
     }
 
-    // --- AsyncSessionHandle::run_query_stream_async ---
+    // run_query_stream_async (from Batch 13, assuming user has corrected version checks)
     boost::asio::awaitable<std::pair<boltprotocol::BoltError, std::unique_ptr<AsyncResultStream>>> AsyncSessionHandle::run_query_stream_async(const std::string& cypher, const std::map<std::string, boltprotocol::Value>& parameters) {
         std::shared_ptr<spdlog::logger> logger = nullptr;
         if (transport_manager_ && transport_manager_->get_config().logger) {
@@ -214,7 +189,6 @@ namespace neo4j_bolt_transport {
             if (logger) logger->warn("[AsyncSessionExecStream] {}", err_msg);
             co_return std::make_pair(boltprotocol::BoltError::NETWORK_ERROR, nullptr);
         }
-        // Prevent starting new operations if close has been initiated.
         if (close_initiated_.load(std::memory_order_acquire)) {
             std::string err_msg = "AsyncSessionHandle::run_query_stream_async called after close_async initiated.";
             if (logger) logger->warn("[AsyncSessionExecStream] {}", err_msg);
@@ -223,7 +197,6 @@ namespace neo4j_bolt_transport {
 
         if (logger) logger->debug("[AsyncSessionExecStream] run_query_stream_async: Cypher: {:.50}...", cypher);
 
-        // 1. Prepare RUN message
         boltprotocol::RunMessageParams run_params = _prepare_run_message_params(cypher, parameters);
         std::vector<uint8_t> run_payload_bytes;
         boltprotocol::PackStreamWriter run_writer(run_payload_bytes);
@@ -237,27 +210,16 @@ namespace neo4j_bolt_transport {
         }
 
         auto static_op_error_handler_for_stream = [this, logger_copy = logger](boltprotocol::BoltError reason, const std::string& message) {
-            // This handler primarily sets the session's error state.
-            // The AsyncResultStream will observe this or its own errors.
             this->last_error_code_ = reason;
             this->last_error_message_ = message;
-            // Do NOT call mark_closed() here, as the stream might be recoverable or the error is specific to the operation
             if (logger_copy) logger_copy->error("[AsyncSessionExecStream:StaticOpErrHandler] Error: {} - {}", static_cast<int>(reason), message);
         };
 
-        // 2. Send RUN and get initial SUCCESS (fields) or FAILURE.
-        // We use send_request_receive_summary_async_static because RUN itself is a request-summary exchange.
-        // Pipelining of RECORDs after RUN's SUCCESS is handled by Bolt protocol, not by this specific call.
         auto [run_summary_err, run_result_summary_obj] = co_await internal::BoltPhysicalConnection::send_request_receive_summary_async_static(*stream_context_, run_payload_bytes, stream_context_->original_config, logger, static_op_error_handler_for_stream);
 
         if (run_summary_err != boltprotocol::BoltError::SUCCESS) {
-            // Error already logged by handler or static method.
-            // last_error_code_ and message should be set.
             co_return std::make_pair(last_error_code_, nullptr);
         }
-
-        // Successfully sent RUN and received its SUCCESS summary.
-        // Now, prepare to hand over to AsyncResultStream.
 
         std::shared_ptr<std::vector<std::string>> fields_ptr = std::make_shared<std::vector<std::string>>();
         auto it_fields = run_result_summary_obj.raw_params().metadata.find("fields");
@@ -279,43 +241,27 @@ namespace neo4j_bolt_transport {
             qid_for_stream = std::get<int64_t>(it_qid->second);
         }
 
-        bool server_had_more_after_run = true;  // Default assumption
+        bool server_had_more_after_run = true;
         auto it_run_has_more = run_result_summary_obj.raw_params().metadata.find("has_more");
         if (it_run_has_more != run_result_summary_obj.raw_params().metadata.end() && std::holds_alternative<bool>(it_run_has_more->second)) {
             server_had_more_after_run = std::get<bool>(it_run_has_more->second);
-        } else {                        // If "has_more" is not present in RUN's SUCCESS
-            if (fields_ptr->empty()) {  // If no fields were returned, there are no records.
+        } else {
+            if (fields_ptr->empty()) {
                 server_had_more_after_run = false;
             }
-            // Otherwise, assume server might send records if fields are present.
         }
 
-        // We move the stream_context_ ownership to the AsyncResultStream.
-        // This AsyncSessionHandle instance becomes "invalid" for further stream operations until
-        // a new stream_context_ is acquired (e.g., for a new query after this stream is done).
-        // However, an AsyncSessionHandle is typically for one logical operation sequence.
-        // If we want the AsyncSessionHandle to be reusable for more queries *after* an AsyncResultStream
-        // is consumed/closed, the stream_context_ ownership model needs to be different (e.g., shared or passed back).
-        // For now, moving ownership to AsyncResultStream is simpler and aligns with a single-stream-per-handle model.
-        // This means this AsyncSessionHandle should not be used for other queries once run_query_stream_async is called
-        // and returns a valid stream, UNLESS the AsyncResultStream returns ownership of the stream_context_ upon its destruction/closure.
+        // Create a copy of the raw parameters for AsyncResultStream, as run_result_summary_obj will go out of scope
+        boltprotocol::SuccessMessageParams run_summary_params_copy = run_result_summary_obj.raw_params();
 
-        // The AsyncSessionHandle itself is not closed here, but its stream_context_ is given away.
-        // It can be "re-armed" if _acquire_active_async_stream_context is called again.
-        // But for a typical async flow, one might get a new AsyncSessionHandle per logical query sequence.
-
-        std::unique_ptr<AsyncResultStream> result_stream = std::make_unique<AsyncResultStream>(this,                        // Pass non-owning pointer to this session
-                                                                                               std::move(stream_context_),  // Move ownership of stream context to the result stream
+        std::unique_ptr<AsyncResultStream> result_stream = std::make_unique<AsyncResultStream>(this,
+                                                                                               std::move(stream_context_),
                                                                                                qid_for_stream,
-                                                                                               run_result_summary_obj.raw_params(),  // Pass RUN raw summary
+                                                                                               std::move(run_summary_params_copy),  // Move the copied raw params
                                                                                                fields_ptr,
-                                                                                               std::vector<boltprotocol::RecordMessageParams>{},  // No pipelined records assumed for this initial step
+                                                                                               std::vector<boltprotocol::RecordMessageParams>{},
                                                                                                server_had_more_after_run,
-                                                                                               this->session_params_  // Pass session config for fetch_size etc.
-        );
-
-        // After moving stream_context_, this AsyncSessionHandle instance should not attempt further operations on it.
-        // Its is_valid() will return false.
+                                                                                               this->session_params_);
 
         if (logger) logger->info("[AsyncSessionExecStream] AsyncResultStream created. QID: {}. Fields: {}", qid_for_stream.has_value() ? std::to_string(qid_for_stream.value()) : "N/A", fields_ptr->size());
         co_return std::make_pair(boltprotocol::BoltError::SUCCESS, std::move(result_stream));
