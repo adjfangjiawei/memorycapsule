@@ -1,5 +1,14 @@
 Starting Clang-Tidy analysis...
+--- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Protocol/BoltProtocol/Example/client_example_tx_begin.cpp ---
+/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
+----------------------------------------
+--- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Protocol/BoltProtocol/Source/handshake.cpp ---
+/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
+----------------------------------------
 --- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Protocol/BoltProtocol/Example/client_example_tx_commit.cpp ---
+/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
+----------------------------------------
+--- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Protocol/BoltProtocol/Example/client_example_tx_pull.cpp ---
 /usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
 ----------------------------------------
 --- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Protocol/BoltProtocol/Example/client_example_main.cpp ---
@@ -8,88 +17,92 @@ Starting Clang-Tidy analysis...
 --- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Protocol/BoltProtocol/Example/client_example_session.cpp ---
 /usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
 ----------------------------------------
---- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Protocol/BoltProtocol/Example/client_example_tx_begin.cpp ---
-/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
-----------------------------------------
---- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Protocol/BoltProtocol/Source/handshake.cpp ---
-/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
-----------------------------------------
---- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Protocol/BoltProtocol/Example/client_example_tx_pull.cpp ---
-/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
-----------------------------------------
 --- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Protocol/BoltProtocol/Example/client_example_tx_run.cpp ---
+/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
+----------------------------------------
+--- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/session_handle_lifecycle.cpp ---
 /usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
 ----------------------------------------
 --- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/internal/bolt_physical_connection_io.cpp ---
 /usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
 ----------------------------------------
---- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/session_handle_stream_interaction.cpp ---
-/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
-----------------------------------------
 --- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/result_stream_consumption.cpp ---
 /usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
 ----------------------------------------
---- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/internal/bolt_physical_connection_lifecycle.cpp ---
+--- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/neo4j_transaction_context.cpp ---
+/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
+--- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/session_handle_stream_interaction.cpp ---
+/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
+----------------------------------------
+----------------------------------------
+--- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/routing/routing_address_selector.cpp ---
 /usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
 ----------------------------------------
 --- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/internal/bolt_physical_connection_state_mgmt.cpp ---
 /usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
 ----------------------------------------
---- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/routing/routing_failure_handler.cpp ---
-/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
-----------------------------------------
---- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/routing/routing_address_selector.cpp ---
+--- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/result_stream_iteration.cpp ---
 /usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
 --- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/internal/bolt_physical_connection_handshake.cpp ---
 /usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
 ----------------------------------------
+----------------------------------------
+--- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/internal/bolt_physical_connection_ssl_context.cpp ---
+/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
+----------------------------------------
 --- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/routing/routing_manager.cpp ---
---- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/session_handle_lifecycle.cpp ---
-/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
 /usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
 ----------------------------------------
-----------------------------------------
+--- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/session_handle_query_execution.cpp ---
+/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
 ----------------------------------------
 --- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/internal/bolt_physical_connection_messaging.cpp ---
 /usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
-----------------------------------------
---- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/session_handle_transaction.cpp ---
-/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
-----------------------------------------
---- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/internal/bolt_physical_connection_auth.cpp ---
-/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
-----------------------------------------
---- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/result_stream_fetching.cpp ---
-/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
-----------------------------------------
---- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/neo4j_bolt_transport_session_acquisition.cpp ---
-/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
-----------------------------------------
---- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/neo4j_transaction_context.cpp ---
-/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
-----------------------------------------
---- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/routing/routing_table_fetcher.cpp ---
-/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
---- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/result_stream_iteration.cpp ---
+--- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/session_handle_managed_tx_internal.cpp ---
 /usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
 ----------------------------------------
 ----------------------------------------
 --- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/neo4j_bolt_transport_pool_eviction.cpp ---
 /usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
 ----------------------------------------
---- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/internal/bolt_physical_connection_socket.cpp ---
+--- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/session_handle_explicit_tx.cpp ---
+/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
+----------------------------------------
+--- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/routing/routing_failure_handler.cpp ---
+/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
+----------------------------------------
+--- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/neo4j_bolt_transport_session_acquisition.cpp ---
+/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
+----------------------------------------
+--- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/internal/bolt_physical_connection_lifecycle.cpp ---
+/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
+----------------------------------------
+--- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/internal/bolt_physical_connection_auth.cpp ---
+/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
+----------------------------------------
+--- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/session_handle_managed_tx_api.cpp ---
+/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
+----------------------------------------
+--- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/result_stream_lifecycle.cpp ---
 /usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
 ----------------------------------------
 --- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/neo4j_bolt_transport_pool_core.cpp ---
 /usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
---- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/session_handle_query_execution.cpp ---
+----------------------------------------
+--- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/result_stream_fetching.cpp ---
+/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
+--- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/routing/routing_table_fetcher.cpp ---
 /usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
 ----------------------------------------
+----------------------------------------
+--- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/internal/bolt_physical_connection_tcp.cpp ---
+/media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/internal/bolt_physical_connection_tcp.cpp:126:64: error: no matching member function for call to 'async_connect' [clang-diagnostic-error]
+/media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/internal/bolt_physical_connection_tcp.cpp:251:33: error: no matching member function for call to 'async_connect' [clang-diagnostic-error]
+/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
+----------------------------------------
+--- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/internal/bolt_physical_connection_ssl_handshake.cpp ---
+/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
 ----------------------------------------
 --- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/neo4j_bolt_transport_lifecycle.cpp ---
-/media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/neo4j_bolt_transport_lifecycle.cpp:115:37: error: too many arguments to function call, expected 0, have 1 [clang-diagnostic-error]
-/usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
-----------------------------------------
---- Issues for /media/root/newvolumn/fjw/memorycapsule/Base/Transport/Neo4jBoltTransport/Source/result_stream_lifecycle.cpp ---
 /usr/include/openssl/macros.h:147:4: error: "OPENSSL_API_COMPAT expresses an impossible API compatibility level" [clang-diagnostic-error]
 ----------------------------------------

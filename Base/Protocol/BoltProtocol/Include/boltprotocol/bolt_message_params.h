@@ -14,12 +14,12 @@ namespace boltprotocol {
 
     // --- Message Parameter Structures ---
 
-    struct HelloMessageParams { /* ... (remains as in previous version) ... */
+    struct HelloMessageParams {
         std::string user_agent;
         std::optional<std::string> auth_scheme;
         std::optional<std::string> auth_principal;
         std::optional<std::string> auth_credentials;
-        std::optional<std::map<std::string, Value>> auth_scheme_specific_tokens;
+        std::optional<std::map<std::string, Value>> auth_scheme_specific_tokens;  // For complex schemes like custom
         std::optional<std::map<std::string, Value>> routing_context;
         std::optional<std::vector<std::string>> patch_bolt;
         std::optional<std::string> notifications_min_severity;
@@ -31,41 +31,41 @@ namespace boltprotocol {
             std::optional<std::string> language_details;
         };
         std::optional<BoltAgentInfo> bolt_agent;
-        std::map<std::string, Value> other_extra_tokens;
+        std::map<std::string, Value> other_extra_tokens;  // For any other non-standard tokens
     };
 
-    struct RunMessageParams { /* ... (remains as in previous version) ... */
+    struct RunMessageParams {
         std::string cypher_query;
         std::map<std::string, Value> parameters;
         std::optional<std::vector<std::string>> bookmarks;
-        std::optional<int64_t> tx_timeout;
-        std::optional<std::map<std::string, Value>> tx_metadata;
-        std::optional<std::string> mode;
+        std::optional<int64_t> tx_timeout;                        // Timeout for the implicit transaction
+        std::optional<std::map<std::string, Value>> tx_metadata;  // Metadata for the implicit transaction
+        std::optional<std::string> mode;                          // "r" for read (Bolt < 5.0)
         std::optional<std::string> db;
         std::optional<std::string> imp_user;
         std::optional<std::string> notifications_min_severity;
         std::optional<std::vector<std::string>> notifications_disabled_categories;
-        std::map<std::string, Value> other_extra_fields;
+        std::map<std::string, Value> other_extra_fields;  // For any other non-standard fields
     };
 
-    struct DiscardMessageParams { /* ... (remains as in previous version) ... */
-        std::optional<int64_t> n;
-        std::optional<int64_t> qid;
+    struct DiscardMessageParams {
+        std::optional<int64_t> n;    // Number of records to discard (-1 for all)
+        std::optional<int64_t> qid;  // Query ID for Bolt 4.0+
     };
-    struct PullMessageParams { /* ... (remains as in previous version) ... */
-        std::optional<int64_t> n;
-        std::optional<int64_t> qid;
+    struct PullMessageParams {
+        std::optional<int64_t> n;    // Number of records to pull (-1 for all remaining in current batch context)
+        std::optional<int64_t> qid;  // Query ID for Bolt 4.0+
     };
-    struct BeginMessageParams { /* ... (remains as in previous version) ... */
+    struct BeginMessageParams {
         std::optional<std::vector<std::string>> bookmarks;
-        std::optional<int64_t> tx_timeout;
-        std::optional<std::map<std::string, Value>> tx_metadata;
-        std::optional<std::string> mode;
+        std::optional<int64_t> tx_timeout;                        // Timeout for the explicit transaction
+        std::optional<std::map<std::string, Value>> tx_metadata;  // Metadata for the explicit transaction
+        std::optional<std::string> mode;                          // "r" for read (Bolt 5.0+)
         std::optional<std::string> db;
         std::optional<std::string> imp_user;
         std::optional<std::string> notifications_min_severity;
         std::optional<std::vector<std::string>> notifications_disabled_categories;
-        std::map<std::string, Value> other_extra_fields;
+        std::map<std::string, Value> other_extra_fields;  // For any other non-standard fields
     };
 
     struct CommitMessageParams { /* PSS field is an empty map {} */
@@ -74,37 +74,31 @@ namespace boltprotocol {
     };
 
     struct RouteMessageParams {
-        // Field 1: routing::Dictionary
-        std::map<std::string, Value> routing_table_context;  // Renamed for clarity from routing_context to avoid clash with HELLO
-
-        // Field 2: bookmarks::List<String>
+        std::map<std::string, Value> routing_table_context;
         std::vector<std::string> bookmarks;
-
-        // For Bolt 4.3, Field 3 is db::String (or null)
-        std::optional<std::string> db_name_for_v43;
-
-        // For Bolt 4.4+, Field 3 is extra::Dictionary(db::String, imp_user::String)
-        // This map can contain "db" and/or "imp_user".
+        std::optional<std::string> db_name_for_v43;  // Bolt 4.3: db (String or null)
+        // Bolt 4.4+: extra map (can contain "db" and/or "imp_user")
+        // Bolt 5.1+: extra map can also contain "notifications_min_severity", "notifications_disabled_categories"
         std::optional<std::map<std::string, Value>> extra_for_v44_plus;
     };
 
-    struct TelemetryMessageParams { /* ... (remains as in previous version) ... */
-        std::map<std::string, Value> metadata;
+    struct TelemetryMessageParams {
+        std::map<std::string, Value> metadata;  // api (int)
     };
-    struct LogonMessageParams { /* ... (remains as in previous version) ... */
+    struct LogonMessageParams {
         std::map<std::string, Value> auth_tokens;
     };
     struct LogoffMessageParams { /* No fields */
     };
 
-    struct SuccessMessageParams { /* ... (remains as in previous version) ... */
+    struct SuccessMessageParams {
         std::map<std::string, Value> metadata;
     };
-    struct RecordMessageParams { /* ... (remains as in previous version) ... */
+    struct RecordMessageParams {
         std::vector<Value> fields;
     };
-    struct FailureMessageParams { /* ... (remains as in previous version) ... */
-        std::map<std::string, Value> metadata;
+    struct FailureMessageParams {
+        std::map<std::string, Value> metadata;  // code (String), message (String)
     };
 
 }  // namespace boltprotocol
