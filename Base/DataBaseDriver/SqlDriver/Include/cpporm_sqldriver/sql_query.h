@@ -8,22 +8,20 @@
 #include <string>
 #include <vector>
 
-#include "sql_driver.h"  // Provides ISqlDriver, SqlResult, ParamType, CursorMovement
+#include "i_sql_driver.h"  // Provides ISqlDriver
+#include "sql_enums.h"     // Provides ParamType, CursorMovement, SqlResultNs enums
 #include "sql_error.h"
+#include "sql_field.h"  // Provides SqlField
 #include "sql_record.h"
-#include "sql_value.h"  // Provides NumericalPrecisionPolicy
+#include "sql_result.h"  // Provides SqlResult
+#include "sql_value.h"   // Provides NumericalPrecisionPolicy
 
 namespace cpporm_sqldriver {
 
     class SqlDatabase;
-    class SqlFieldExtendedInfo;  // Defined in sql_field.h, include it if not already by sql_driver.h chain
-    // #include "sql_field.h" // Or include directly if SqlFieldExtendedInfo is needed here and not pulled by sql_driver.h
-
-    // ParamType, CursorMovement, NumericalPrecisionPolicy are now sourced from sql_driver.h or sql_value.h
 
     enum class BatchExecutionMode {
         ValuesAsRows,
-        // ValuesAsColumns
     };
 
     class SqlQuery {
@@ -32,14 +30,13 @@ namespace cpporm_sqldriver {
         explicit SqlQuery(const std::string& query, SqlDatabase& db);
         ~SqlQuery();
 
-        bool prepare(const std::string& query, SqlResult::ScrollMode scroll = SqlResult::ScrollMode::ForwardOnly, SqlResult::ConcurrencyMode concur = SqlResult::ConcurrencyMode::ReadOnly);
+        bool prepare(const std::string& query, SqlResultNs::ScrollMode scroll = SqlResultNs::ScrollMode::ForwardOnly, SqlResultNs::ConcurrencyMode concur = SqlResultNs::ConcurrencyMode::ReadOnly);
         bool exec();
         bool exec(const std::string& query);
         bool setQueryTimeout(int seconds);
-        // bool cancel();
 
-        void bindValue(int pos, const SqlValue& val, ParamType type = ParamType::In);
-        void bindValue(const std::string& placeholderName, const SqlValue& val, ParamType type = ParamType::In);
+        void bindValue(int pos, const SqlValue& val, ParamType type = ParamType::In, int size_hint_for_out_param = 0);
+        void bindValue(const std::string& placeholderName, const SqlValue& val, ParamType type = ParamType::In, int size_hint_for_out_param = 0);
         void addBindValue(const SqlValue& val, ParamType type = ParamType::In);
         void bindValues(const std::vector<SqlValue>& values, ParamType type = ParamType::In);
         void bindValues(const std::map<std::string, SqlValue>& values, ParamType type = ParamType::In);
@@ -49,6 +46,7 @@ namespace cpporm_sqldriver {
         const std::map<std::string, SqlValue>& namedBoundValues() const;
         const std::vector<SqlValue>& positionalBoundValues() const;
         void clearBoundValues();
+        int numberOfBoundValues() const;
 
         bool next();
         bool previous();
@@ -62,8 +60,8 @@ namespace cpporm_sqldriver {
         SqlValue value(const std::string& name) const;
         bool isNull(int index) const;
         bool isNull(const std::string& name) const;
-        // SqlFieldExtendedInfo fieldExtendedInfo(int index) const; // Needs SqlFieldExtendedInfo definition to be visible
-        // SqlFieldExtendedInfo fieldExtendedInfo(const std::string& name) const;
+        SqlField field(int index) const;
+        SqlField field(const std::string& name) const;
 
         int at() const;
         int size() const;
@@ -75,6 +73,7 @@ namespace cpporm_sqldriver {
         bool setNumericalPrecisionPolicy(NumericalPrecisionPolicy policy);
         SqlError lastError() const;
         std::string lastQuery() const;
+        std::string executedQuery() const;
 
         long long numRowsAffected() const;
         SqlValue lastInsertId() const;

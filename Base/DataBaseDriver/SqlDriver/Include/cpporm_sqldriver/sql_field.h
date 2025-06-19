@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#include "sql_value.h"  // Provides SqlValue, SqlValueType
+#include "sql_value.h"
 
 namespace cpporm_sqldriver {
 
@@ -29,6 +29,8 @@ namespace cpporm_sqldriver {
 
         std::string databaseTypeName() const;
         void setDatabaseTypeName(const std::string& name);
+        int driverType() const;
+        void setDriverType(int typeId);
 
         int length() const;
         void setLength(int len);
@@ -91,9 +93,5 @@ namespace cpporm_sqldriver {
         class Private;
         std::unique_ptr<Private> d;
     };
-
-    // SqlFieldExtendedInfo is removed as its functionality is merged into SqlField.
-    // If SqlQuery::fieldExtendedInfo() needs a distinct return type, it would be defined,
-    // but for now, enhancing SqlField itself is chosen.
 
 }  // namespace cpporm_sqldriver

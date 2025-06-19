@@ -6,4 +6,4 @@ file(GLOB_RECURSE CPPORM_SOURCES
 
 add_library(CppOrm ${CPPORM_SOURCES})
 target_include_directories(CppOrm PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/Include)
-target_link_libraries(CppOrm PUBLIC Qt6::Core Qt6::Sql)
+target_link_libraries(CppOrm PUBLIC Qt6::Core DataBaseDriver)

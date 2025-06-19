@@ -1,6 +1,6 @@
 // cpporm_sqldriver/sql_value.h
 #pragma once
-#include <QByteArray>  // Assuming Qt Core types are permissible for CppOrm transition
+#include <QByteArray>
 #include <QDate>
 #include <QDateTime>
 #include <QTime>
@@ -8,6 +8,7 @@
 #include <any>
 #include <chrono>
 #include <iosfwd>
+#include <memory>
 #include <optional>
 #include <string>
 #include <typeinfo>
@@ -16,69 +17,122 @@
 
 namespace cpporm_sqldriver {
 
-    enum class SqlValueType { Null, Bool, Int, UInt, LongLong, ULongLong, Float, Double, String, ByteArray, Date, Time, DateTime, Decimal, Json, Xml, Array, Stream, Custom };
-
-    // NumericalPrecisionPolicy 定义在此处，因为它与 SqlValue 的转换行为紧密相关
-    enum class NumericalPrecisionPolicy {
-        LowPrecision,        // 类似 QVariant 的行为，可能损失精度
-        HighPrecision,       // 尝试保持精度，例如数字可能转为字符串
-        ExactRepresentation  // 要求精确表示，否则转换失败
+    enum class SqlValueType {
+        Null,
+        Bool,
+        Int8,
+        UInt8,
+        Int16,
+        UInt16,
+        Int32,
+        UInt32,
+        Int64,
+        UInt64,
+        Float,
+        Double,
+        LongDouble,
+        String,
+        FixedString,
+        ByteArray,
+        BinaryLargeObject,
+        CharacterLargeObject,
+        Date,
+        Time,
+        DateTime,
+        Timestamp,
+        Interval,
+        Decimal,
+        Numeric,
+        Json,
+        Xml,
+        Array,
+        RowId,
+        Custom,
+        Unknown
     };
+
+    enum class NumericalPrecisionPolicy { LowPrecision, HighPrecision, ExactRepresentation };
 
     class SqlValue {
       public:
         using ChronoDate = std::chrono::year_month_day;
-        using ChronoTime = std::chrono::nanoseconds;  // 代表从午夜开始的持续时间，纳秒精度
+        using ChronoTime = std::chrono::nanoseconds;
         using ChronoDateTime = std::chrono::system_clock::time_point;
+        using BlobInputStream = std::shared_ptr<std::istream>;
+        using BlobOutputStream = std::shared_ptr<std::ostream>;
+        using ClobInputStream = std::shared_ptr<std::basic_istream<char>>;
+        using ClobOutputStream = std::shared_ptr<std::basic_ostream<char>>;
 
-        // 构造函数
-        SqlValue();                // Null 状态
-        SqlValue(std::nullptr_t);  // 显式 Null
+        SqlValue();
+        SqlValue(std::nullptr_t);
         SqlValue(bool val);
-        SqlValue(int val);
-        SqlValue(unsigned int val);
-        SqlValue(long long val);
-        SqlValue(unsigned long long val);
-        SqlValue(float val);  // 内部存储为 double
+        SqlValue(int8_t val);
+        SqlValue(uint8_t val);
+        SqlValue(int16_t val);
+        SqlValue(uint16_t val);
+        SqlValue(int32_t val);
+        SqlValue(uint32_t val);
+        SqlValue(int64_t val);
+        SqlValue(uint64_t val);
+        SqlValue(float val);
         SqlValue(double val);
-        SqlValue(const char* val);
-        SqlValue(const std::string& val);
-        SqlValue(const std::vector<unsigned char>& val);  // 原生字节数组
+        SqlValue(long double val);
+        SqlValue(const char* val, SqlValueType type_hint = SqlValueType::String);
+        SqlValue(const std::string& val, SqlValueType type_hint = SqlValueType::String);
+        SqlValue(const std::vector<unsigned char>& val);
 
-        // Qt types for easier CppOrm transition
+        // SqlValue(const SqlDecimal& val);
+        // SqlValue(const SqlJsonDocument& val);
+        // SqlValue(const SqlXmlDocument& val);
+        // template<typename T> SqlValue(const SqlArray<T>& val);
+
+        SqlValue(BlobInputStream stream_handle, long long size = -1);
+        SqlValue(ClobInputStream stream_handle, long long size = -1, const std::string& charset = "UTF-8");
+
         SqlValue(const QByteArray& val);
         SqlValue(const QDate& val);
         SqlValue(const QTime& val);
         SqlValue(const QDateTime& val);
 
-        // Chrono types
         SqlValue(const ChronoDate& val);
-        SqlValue(const ChronoTime& val);  // Duration
+        SqlValue(const ChronoTime& val);
         SqlValue(const ChronoDateTime& val);
 
-        // 拷贝和移动
         SqlValue(const SqlValue& other);
         SqlValue& operator=(const SqlValue& other);
         SqlValue(SqlValue&& other) noexcept;
         SqlValue& operator=(SqlValue&& other) noexcept;
         ~SqlValue();
 
-        // 类型检查和元数据
         bool isNull() const;
-        bool isValid() const;          // SqlValue 通常总是有效的，除非是默认构造且未设置
-        SqlValueType type() const;     // 返回 SqlValueType 枚举
-        const char* typeName() const;  // 返回类型的C字符串名称 (类似 QVariant::typeName)
+        bool isValid() const;
+        SqlValueType type() const;
+        const char* typeName() const;
+        std::string driverTypeName() const;
+        void setDriverTypeName(const std::string& name);
 
-        // 类型转换方法 (ok 参数表示转换是否成功)
         bool toBool(bool* ok = nullptr) const;
-        int toInt(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
-        unsigned int toUInt(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
-        long long toLongLong(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
-        unsigned long long toULongLong(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
+        int8_t toInt8(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
+        uint8_t toUInt8(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
+        int16_t toInt16(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
+        uint16_t toUInt16(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
+        int32_t toInt32(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;    // Corresponds to 'int'
+        uint32_t toUInt32(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;  // Corresponds to 'unsigned int'
+        int64_t toInt64(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;    // Corresponds to 'long long'
+        uint64_t toUInt64(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;  // Corresponds to 'unsigned long long'
         float toFloat(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
         double toDouble(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
+        long double toLongDouble(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
         std::string toString(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
         std::vector<unsigned char> toStdVectorUChar(bool* ok = nullptr) const;
+
+        // SqlDecimal toDecimal(bool* ok = nullptr) const;
+        // SqlJsonDocument toJsonDocument(bool* ok = nullptr) const;
+        // SqlXmlDocument toXmlDocument(bool* ok = nullptr) const;
+        // template<typename T> std::optional<SqlArray<T>> toArray(bool* ok = nullptr) const;
+
+        BlobInputStream toBlobInputStream(bool* ok = nullptr) const;
+        ClobInputStream toClobInputStream(bool* ok = nullptr) const;
 
         QByteArray toByteArray(bool* ok = nullptr) const;
         QDate toDate(bool* ok = nullptr) const;
@@ -89,42 +143,47 @@ namespace cpporm_sqldriver {
         ChronoTime toChronoTime(bool* ok = nullptr) const;
         ChronoDateTime toChronoDateTime(bool* ok = nullptr) const;
 
-        // 比较操作符
         bool operator==(const SqlValue& other) const;
         bool operator!=(const SqlValue& other) const;
 
-        void clear();  // 重置为 Null 状态
+        void clear();
 
-        // 转换为 QVariant (为了 CppOrm 层的兼容性)
         QVariant toQVariant() const;
         static SqlValue fromQVariant(const QVariant& qv);
 
-        std::any toStdAny() const;  // 转换为 std::any
-        static SqlValue fromStdAny(const std::any& val);
+        std::any toStdAny() const;
+        static SqlValue fromStdAny(const std::any& val, SqlValueType type_hint = SqlValueType::Custom);
 
       private:
-        // 使用 std::variant 存储实际数据
-        using StorageType = std::variant<std::monostate,  // 代表 Null
+        using StorageType = std::variant<std::monostate,
                                          bool,
-                                         int,
-                                         unsigned int,
-                                         long long,
-                                         unsigned long long,
-                                         double,  // float is stored as double
+                                         int8_t,
+                                         uint8_t,
+                                         int16_t,
+                                         uint16_t,
+                                         int32_t,
+                                         uint32_t,
+                                         int64_t,
+                                         uint64_t,
+                                         float,
+                                         double,
+                                         long double,
                                          std::string,
-                                         std::vector<unsigned char>,  // For native byte array
+                                         std::vector<unsigned char>,
+                                         BlobInputStream,
+                                         ClobInputStream,
                                          QByteArray,
                                          QDate,
                                          QTime,
-                                         QDateTime,  // Qt types
+                                         QDateTime,
                                          ChronoDate,
                                          ChronoTime,
-                                         ChronoDateTime,  // Chrono types
-                                         std::any         // 用于存储驱动特定的或非常规类型 (谨慎使用)
-                                         >;
+                                         ChronoDateTime,
+                                         std::any>;
         StorageType value_;
         SqlValueType current_type_enum_ = SqlValueType::Null;
-        void updateCurrentTypeEnum();  // 辅助函数，根据 value_ 更新 current_type_enum_
+        std::string driver_type_name_;
+        void updateCurrentTypeEnum();
     };
 
 }  // namespace cpporm_sqldriver

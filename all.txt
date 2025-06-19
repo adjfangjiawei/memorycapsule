@@ -7040,307 +7040,761 @@ std::expected<long long, Error> Session::Updates(
   return this->UpdatesImpl(qb, updates_map);
 }
 
-} // namespace cpporm// cpporm_sqldriver/sql_database.h
+} // namespace cpporm// cpporm_sqldriver/i_sql_driver.h
 #pragma once
-#include <map>
-#include <string>
 
-#include "sql_driver.h"  // 可选，用于特性
+#include <any>
+#include <map>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "sql_connection_parameters.h"  // Provides ConnectionParameters
+#include "sql_enums.h"                  // Provides Feature, IdentifierType, StatementType, TransactionIsolationLevel, ISqlDriverNs::TableType
 #include "sql_error.h"
+#include "sql_index.h"
+#include "sql_record.h"
+#include "sql_value.h"  // For SqlValue, SqlValueType
 
 namespace cpporm_sqldriver {
 
-    // 前向声明，实际的驱动特性接口
-    // class ISqlDriver;
+    class SqlResult;
+    class SqlField;
+
+    class ISqlDriver {
+      public:
+        virtual ~ISqlDriver() = default;
+
+        virtual bool open(const ConnectionParameters& params) = 0;
+        virtual void close() = 0;
+        virtual bool isOpen() const = 0;
+        virtual bool isOpenError() const = 0;
+        virtual bool ping(int timeout_seconds = 2) = 0;
+
+        virtual bool beginTransaction() = 0;
+        virtual bool commitTransaction() = 0;
+        virtual bool rollbackTransaction() = 0;
+        virtual bool setTransactionIsolationLevel(TransactionIsolationLevel level) = 0;
+        virtual TransactionIsolationLevel transactionIsolationLevel() const = 0;
+        virtual bool setSavepoint(const std::string& name) = 0;
+        virtual bool rollbackToSavepoint(const std::string& name) = 0;
+        virtual bool releaseSavepoint(const std::string& name) = 0;
+
+        virtual std::unique_ptr<SqlResult> createResult() const = 0;
+
+        virtual std::vector<std::string> tables(ISqlDriverNs::TableType type = ISqlDriverNs::TableType::Tables, const std::string& schemaFilter = "", const std::string& tableNameFilter = "") const = 0;
+        virtual std::vector<std::string> schemas(const std::string& schemaFilter = "") const = 0;
+        virtual SqlRecord record(const std::string& tablename, const std::string& schema = "") const = 0;
+        virtual SqlIndex primaryIndex(const std::string& tablename, const std::string& schema = "") const = 0;
+        virtual std::vector<SqlIndex> indexes(const std::string& tablename, const std::string& schema = "") const = 0;
+
+        virtual bool hasFeature(Feature feature) const = 0;
+        virtual SqlError lastError() const = 0;
+        virtual std::string databaseProductVersion() const = 0;
+        virtual std::string driverVersion() const = 0;
+
+        virtual std::string formatValue(const SqlValue& value, SqlValueType type_hint = SqlValueType::Null, const SqlField* field_meta_hint = nullptr) const = 0;
+        virtual std::string escapeIdentifier(const std::string& identifier, IdentifierType type) const = 0;
+        virtual std::string sqlStatement(StatementType type, const std::string& tableName, const SqlRecord& rec, bool prepared, const std::string& schema = "") const = 0;
+
+        virtual bool setClientCharset(const std::string& charsetName) = 0;
+        virtual std::string clientCharset() const = 0;
+
+        virtual SqlValue nextSequenceValue(const std::string& sequenceName, const std::string& schema = "") = 0;
+
+        virtual SqlValue nativeHandle() const = 0;
+    };
+
+}  // namespace cpporm_sqldriver// cpporm_sqldriver/sql_connection_parameters.h
+#pragma once
+
+#include <map>
+#include <optional>
+#include <string>
+#include <vector>  // Not directly used here, but often associated with parameter sets
+
+#include "sql_value.h"  // For SqlValue used as map value
+
+namespace cpporm_sqldriver {
+
+    struct ConnectionParameters : public std::map<std::string, SqlValue> {
+        // 定义键常量 (声明)
+        static const std::string KEY_DRIVER_TYPE;
+        static const std::string KEY_DB_NAME;
+        static const std::string KEY_USER_NAME;
+        static const std::string KEY_PASSWORD;
+        static const std::string KEY_HOST_NAME;
+        static const std::string KEY_PORT;
+        static const std::string KEY_CONNECT_OPTIONS;
+        static const std::string KEY_CLIENT_CHARSET;
+        static const std::string KEY_APPLICATION_NAME;
+        static const std::string KEY_CONNECTION_TIMEOUT_SECONDS;
+        static const std::string KEY_READ_TIMEOUT_SECONDS;
+        static const std::string KEY_WRITE_TIMEOUT_SECONDS;
+        static const std::string KEY_SSL_MODE;
+        static const std::string KEY_SSL_CERT_PATH;
+        static const std::string KEY_SSL_KEY_PATH;
+        static const std::string KEY_SSL_CA_PATH;
+        static const std::string KEY_SSL_CIPHER;
+        static const std::string KEY_POOL_MAX_SIZE;
+        static const std::string KEY_POOL_MIN_SIZE;
+        static const std::string KEY_POOL_ACQUIRE_TIMEOUT_MS;
+        static const std::string KEY_POOL_CONNECTION_LIFETIME_MS;
+        static const std::string KEY_POOL_IDLE_TIMEOUT_MS;
+
+        // Setters (声明)
+        void setDriverType(const std::string& v);
+        void setDbName(const std::string& v);
+        void setUserName(const std::string& v);
+        void setPassword(const std::string& v);
+        void setHostName(const std::string& v);
+        void setPort(int v);
+        void setConnectOptions(const std::string& v);
+        void setClientCharset(const std::string& v);
+        void setApplicationName(const std::string& v);
+        void setConnectionTimeoutSeconds(int v);
+        void setReadTimeoutSeconds(int v);
+        void setWriteTimeoutSeconds(int v);
+        void setSslMode(const std::string& v);
+        void setSslCertPath(const std::string& v);
+        void setSslKeyPath(const std::string& v);
+        void setSslCaPath(const std::string& v);
+        void setSslCipher(const std::string& v);
+        void setPoolMaxSize(int v);
+        void setPoolMinSize(int v);
+        void setPoolAcquireTimeoutMs(long long v);
+        void setPoolConnectionLifetimeMs(long long v);
+        void setPoolIdleTimeoutMs(long long v);
+
+        // Getters (声明)
+        template <typename T>
+        std::optional<T> get(const std::string& key) const;
+
+        std::optional<std::string> driverType() const;
+        std::optional<std::string> dbName() const;
+        std::optional<std::string> userName() const;
+        std::optional<std::string> password() const;
+        std::optional<std::string> hostName() const;
+        std::optional<int> port() const;
+        std::optional<std::string> connectOptions() const;
+        std::optional<std::string> clientCharset() const;
+        std::optional<std::string> applicationName() const;
+        std::optional<int> connectionTimeoutSeconds() const;
+        std::optional<int> readTimeoutSeconds() const;
+        std::optional<int> writeTimeoutSeconds() const;
+        std::optional<std::string> sslMode() const;
+        std::optional<std::string> sslCertPath() const;
+        std::optional<std::string> sslKeyPath() const;
+        std::optional<std::string> sslCaPath() const;
+        std::optional<std::string> sslCipher() const;
+        std::optional<int> poolMaxSize() const;
+        std::optional<int> poolMinSize() const;
+        std::optional<long long> poolAcquireTimeoutMs() const;
+        std::optional<long long> poolConnectionLifetimeMs() const;
+        std::optional<long long> poolIdleTimeoutMs() const;
+    };
+
+    template <typename T>
+    std::optional<T> ConnectionParameters::get(const std::string& key) const {
+        auto it = find(key);
+        if (it != end() && !it->second.isNull()) {
+            bool ok = false;
+            T result{};
+            if constexpr (std::is_same_v<T, std::string>) {
+                result = it->second.toString(&ok);
+            } else if constexpr (std::is_same_v<T, int>) {
+                result = it->second.toInt32(&ok);
+            } else if constexpr (std::is_same_v<T, unsigned int>) {
+                result = it->second.toUInt32(&ok);
+            } else if constexpr (std::is_same_v<T, long long>) {
+                result = it->second.toInt64(&ok);
+            } else if constexpr (std::is_same_v<T, unsigned long long>) {
+                result = it->second.toUInt64(&ok);
+            } else if constexpr (std::is_same_v<T, bool>) {
+                result = it->second.toBool(&ok);
+            } else if constexpr (std::is_same_v<T, float>) {
+                result = it->second.toFloat(&ok);
+            } else if constexpr (std::is_same_v<T, double>) {
+                result = it->second.toDouble(&ok);
+            } else if constexpr (std::is_same_v<T, long double>) {
+                result = it->second.toLongDouble(&ok);
+            } else if constexpr (std::is_same_v<T, QByteArray>) {
+                result = it->second.toByteArray(&ok);
+            } else if constexpr (std::is_same_v<T, QDate>) {
+                result = it->second.toDate(&ok);
+            } else if constexpr (std::is_same_v<T, QTime>) {
+                result = it->second.toTime(&ok);
+            } else if constexpr (std::is_same_v<T, QDateTime>) {
+                result = it->second.toDateTime(&ok);
+            } else if constexpr (std::is_same_v<T, SqlValue::ChronoDate>) {
+                result = it->second.toChronoDate(&ok);
+            } else if constexpr (std::is_same_v<T, SqlValue::ChronoTime>) {
+                result = it->second.toChronoTime(&ok);
+            } else if constexpr (std::is_same_v<T, SqlValue::ChronoDateTime>) {
+                result = it->second.toChronoDateTime(&ok);
+            } else if constexpr (std::is_same_v<T, std::vector<unsigned char>>) {
+                result = it->second.toStdVectorUChar(&ok);
+            }
+            // else if constexpr (std::is_same_v<T, SqlDecimal>) { result = it->second.toDecimal(&ok); } // Example for custom types
+            // else if constexpr (std::is_same_v<T, SqlJsonDocument>) { result = it->second.toJsonDocument(&ok); }
+            else {
+                // For std::any or other unlisted types, this path would be taken.
+                // Consider if a static_assert(false, "Unsupported type T for ConnectionParameters::get") is appropriate,
+                // or if it should attempt a toStdAny() and std::any_cast, which is more risky.
+                // For now, ok will remain false if no specific conversion is matched.
+            }
+            if (ok) return result;
+        }
+        return std::nullopt;
+    }
+
+}  // namespace cpporm_sqldriver// cpporm_sqldriver/sql_database.h
+#pragma once
+#include <any>
+#include <map>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "i_sql_driver.h"               // Provides ISqlDriver interface
+#include "sql_connection_parameters.h"  // Provides ConnectionParameters
+#include "sql_enums.h"                  // Provides Feature, TransactionIsolationLevel, ISqlDriverNs::TableType etc.
+#include "sql_error.h"
+#include "sql_index.h"   // Provides SqlIndex
+#include "sql_record.h"  // Provides SqlRecord
+
+namespace cpporm_sqldriver {
+
+    class SqlQuery;
 
     class SqlDatabase {
       public:
-        // SqlDatabase(); // 默认构造通常无效，需要通过 SqlDriverManager 获取
         ~SqlDatabase();
 
-        // 连接管理 (模仿 QSqlDatabase 实例方法)
+        bool open(const ConnectionParameters& params);
         bool open();
         bool open(const std::string& user, const std::string& password);
         void close();
         bool isOpen() const;
-        bool isValid() const;  // 检查驱动是否有效加载
+        bool isValid() const;
+        bool ping(int timeout_seconds = 2);
 
-        // 事务控制
-        bool transaction();  // 开始事务
+        bool transaction();
         bool commit();
         bool rollback();
+        bool isTransactionActive() const;
+        bool setTransactionIsolationLevel(TransactionIsolationLevel level);
+        TransactionIsolationLevel transactionIsolationLevel() const;
+        bool setSavepoint(const std::string& name);
+        bool rollbackToSavepoint(const std::string& name);
+        bool releaseSavepoint(const std::string& name);
 
-        // 驱动和连接信息
-        std::string driverName() const;    // e.g., "MYSQL", "SQLITE"
-        std::string databaseName() const;  // 连接的数据库名
-        std::string userName() const;
-        std::string password() const;
-        std::string hostName() const;
-        int port() const;
-        std::string connectOptions() const;
-
+        std::string driverName() const;
+        std::string databaseName() const;
         void setDatabaseName(const std::string& name);
+
+        std::string userName() const;
         void setUserName(const std::string& name);
+
         void setPassword(const std::string& password);
+
+        std::string hostName() const;
         void setHostName(const std::string& host);
+
+        int port() const;
         void setPort(int port);
-        void setConnectOptions(const std::string& options);
+
+        std::string connectOptionsString() const;
+        void setConnectOptionsString(const std::string& options);
+
+        const ConnectionParameters& connectionParameters() const;
+        void setConnectionParameter(const std::string& key, const SqlValue& value);
+        SqlValue connectionParameter(const std::string& key) const;
 
         SqlError lastError() const;
 
-        // ISqlDriver* driver() const; // 可选，返回驱动特性接口
+        ISqlDriver* driver() const;
+        std::string connectionName() const;
 
-        // 内部使用，由 SqlDriverManager 设置
-        SqlDatabase(const std::string& driverType, const std::string& connectionName);
+        std::vector<std::string> tables(ISqlDriverNs::TableType type = ISqlDriverNs::TableType::Tables, const std::string& schemaFilter = "", const std::string& tableNameFilter = "") const;
+        std::vector<std::string> schemas(const std::string& schemaFilter = "") const;
+        SqlRecord record(const std::string& tablename, const std::string& schema = "") const;
+        SqlIndex primaryIndex(const std::string& tablename, const std::string& schema = "") const;
+        std::vector<SqlIndex> indexes(const std::string& tablename, const std::string& schema = "") const;
+
+        bool hasFeature(Feature feature) const;
+        SqlValue nativeHandle() const;
+        std::string databaseProductVersion() const;
+        std::string driverVersion() const;
+
+        bool setClientCharset(const std::string& charsetName);
+        std::string clientCharset() const;
+
+        SqlValue nextSequenceValue(const std::string& sequenceName, const std::string& schema = "");
 
       private:
-        friend class SqlDriverManager;  // 允许管理器访问构造和内部
-        friend class SqlQuery;          // 允许查询访问连接句柄
+        friend class SqlDriverManager;
+        friend class SqlQuery;
 
-        // 实现将依赖 Transport 和 Protocol
-        // 需要成员变量来存储:
-        // - 驱动类型 (e.g., "MYSQL")
-        // - 连接名
-        // - 连接参数
-        // - 底层连接句柄 (来自 Transport 层)
-        // - 事务状态
-        // - 错误状态
-        // - 指向具体驱动实现的指针 (ISqlDriver* 或更具体的)
-        class Private;  // PImpl
-        Private* d;
+        SqlDatabase(const std::string& driverTypeFromManager, const std::string& assignedConnectionName, std::unique_ptr<ISqlDriver> driverImplementation);
 
-        // 防止拷贝
+        class Private;
+        std::unique_ptr<Private> d;
+
         SqlDatabase(const SqlDatabase&) = delete;
         SqlDatabase& operator=(const SqlDatabase&) = delete;
-        // 允许移动
         SqlDatabase(SqlDatabase&&) noexcept;
         SqlDatabase& operator=(SqlDatabase&&) noexcept;
     };
 
-}  // namespace cpporm_sqldriver// cpporm_sqldriver/sql_driver.h
-#pragma once
-#include <string>
-
-namespace cpporm_sqldriver {
-
-    // 这个枚举模仿 QSqlDriver::Feature，但可以根据您的需求调整
-    enum class Feature {
-        Transactions,                // 是否支持事务
-        QuerySize,                   // query.size() 是否有效
-        BLOB,                        // 是否支持 BLOB
-        Unicode,                     // 是否支持 Unicode
-        PreparedQueries,             // 是否支持预处理语句
-        NamedPlaceholders,           // 是否支持命名占位符 (e.g., :name)
-        PositionalPlaceholders,      // 是否支持位置占位符 (e.g., ?)
-        LastInsertId,                // lastInsertId() 是否有效
-        BatchOperations,             // 是否支持批量操作 (通过 addBindValue + execBatch)
-        SimpleScrollOnError,         //
-        EventNotifications,          // (可能不需要)
-        FinishQuery,                 // (可能不需要)
-        MultipleResultSets,          // 一次执行返回多个结果集
-        Named जयपुरियाholders LietKe  // (这是一个示例，表明可以有自定义特性)
-    };
-
 }  // namespace cpporm_sqldriver// cpporm_sqldriver/sql_driver_manager.h
 #pragma once
-#include <memory>  // for unique_ptr
+#include <functional>  // For std::function
+#include <memory>
 #include <string>
 #include <vector>
 
-#include "sql_database.h"  // 需要 SqlDatabase
+#include "sql_database.h"
 
 namespace cpporm_sqldriver {
 
+    class ISqlDriver;  // 前向声明
+
     class SqlDriverManager {
       public:
-        // 连接管理 (模仿 QSqlDatabase 静态方法)
+        using DriverFactory = std::function<std::unique_ptr<ISqlDriver>()>;
+
+        // 连接管理
         static SqlDatabase addDatabase(const std::string& driverType, const std::string& connectionName = defaultConnectionName());
-
-        static SqlDatabase database(const std::string& connectionName = defaultConnectionName(),
-                                    bool open = true);  // open 参数 Qt 中没有，但可以考虑
-
+        static SqlDatabase database(const std::string& connectionName = defaultConnectionName(), bool open = true);
         static void removeDatabase(const std::string& connectionName);
         static bool contains(const std::string& connectionName = defaultConnectionName());
-        static std::vector<std::string> drivers();  // 列出可用的驱动类型 ("MYSQL", "SQLITE"...)
 
-        static std::string defaultConnectionName();  // "qt_sql_default_connection"
+        // 驱动信息
+        static std::vector<std::string> drivers();                     // 列出已注册的驱动类型
+        static bool isDriverAvailable(const std::string& driverType);  // 检查驱动是否可用
 
-        // 注册驱动的接口 (由具体驱动实现在初始化时调用)
-        // typedef std::function<std::unique_ptr<ISqlDriverImplInterface>()> DriverFactory;
-        // static void registerDriver(const std::string& driverName, DriverFactory factory);
+        static std::string defaultConnectionName();
+
+        // 驱动注册 (由具体驱动实现模块在初始化时调用)
+        static bool registerDriver(const std::string& driverName, DriverFactory factory);
+        // static void unregisterDriver(const std::string& driverName); // 可选
 
       private:
         SqlDriverManager() = delete;  // 静态类
 
-        // 内部管理连接池或连接列表
-        // static std::map<std::string, SqlDatabase> connections_;
-        // static std::map<std::string, DriverFactory> registered_drivers_;
-        // static std::mutex mutex_;
-        class Private;
-        static Private* d();  // 获取静态 PImpl 实例
+        class Private;  // PImpl for static data
+        static Private* d();
     };
+
+}  // namespace cpporm_sqldriver// cpporm_sqldriver/sql_enums.h
+#pragma once
+
+namespace cpporm_sqldriver {
+
+    // --- Enums used across driver interfaces ---
+
+    enum class Feature {
+        Transactions,
+        QuerySize,
+        BLOB,
+        Unicode,
+        PreparedQueries,
+        NamedPlaceholders,
+        PositionalPlaceholders,
+        LastInsertId,
+        BatchOperations,
+        SimpleScrollOnError,
+        EventNotifications,
+        FinishQuery,
+        MultipleResultSets,
+        LowPrecisionNumbers,
+        CancelQuery,
+        InsertAndReturnId,
+        NamedSavepoints,
+        ThreadSafe,
+        SchemaOperations,
+        SequenceOperations,
+        UpdatableCursors,
+        TransactionIsolationLevel,
+        GetTypeInfo,
+        PingConnection,
+        SetQueryTimeout,
+        StreamBlob,
+        CallableStatements,
+        BatchWithErrorDetails
+    };
+
+    enum class IdentifierType { Table, Field, Index, Schema, Sequence, Trigger, View, Constraint, User, Role, Procedure, Function };
+
+    enum class StatementType { Select, Insert, Update, Delete, DDL, DCL, TCL, Call, Begin, Commit, Rollback, Savepoint, Unknown };
+
+    enum class TransactionIsolationLevel { ReadUncommitted, ReadCommitted, RepeatableRead, Serializable, Snapshot, Default };
+
+    enum class ParamType { In, Out, InOut, Binary, ReturnValue };
+
+    enum class CursorMovement { Absolute, RelativeFirst, RelativeNext, RelativePrevious, RelativeLast };
+
+    namespace ISqlDriverNs {
+        enum class TableType { All, Tables, Views, SystemTables, Aliases, Synonyms, TemporaryTables, GlobalTemporaryTables };
+    }  // namespace ISqlDriverNs
+
+    namespace SqlResultNs {
+        enum class ScrollMode { ForwardOnly, Scrollable };
+        enum class ConcurrencyMode { ReadOnly, Updatable };
+        enum class NamedBindingSyntax { Colon, AtSign, QuestionMark };
+    }  // namespace SqlResultNs
 
 }  // namespace cpporm_sqldriver// cpporm_sqldriver/sql_error.h
 #pragma once
+#include <optional>
 #include <string>
 
 namespace cpporm_sqldriver {
 
-    enum class ErrorType { NoError = 0, ConnectionError, StatementError, TransactionError, UnknownError };
+    // ErrorCategory 和 ErrorType 枚举定义在文件顶部或类的外部
+    enum class ErrorCategory { NoError, Connectivity, Syntax, Constraint, Permissions, DataRelated, Resource, Transaction, DriverInternal, DatabaseInternal, OperationCancelled, FeatureNotSupported, Unknown };
+
+    // 旧的 ErrorType，如果仍需保留用于映射或兼容
+    enum class ErrorType {
+        NoError = 0,  // 保持与Qt QSqlError::NoError 一致
+        ConnectionError,
+        StatementError,
+        TransactionError,
+        UnknownError,
+        FeatureNotSupportedError,
+        DataError,
+        ConstraintViolationError
+    };
 
     class SqlError {
       public:
-        SqlError();  // NoError
-        SqlError(ErrorType type, const std::string& databaseText, const std::string& driverText = "", const std::string& nativeErrorCode = "");
+        SqlError();
+        SqlError(ErrorCategory category,
+                 const std::string& databaseText,
+                 const std::string& driverText = "",
+                 const std::string& nativeErrorCode = "",
+                 int nativeDbCodeNumeric = 0,
+                 const std::string& failedQuery = "",
+                 const std::string& constraintName = "",
+                 const std::optional<int>& errorOffset = std::nullopt);
 
-        ErrorType type() const;
-        std::string databaseText() const;     // 对应 QSqlError::databaseText()
-        std::string driverText() const;       // 对应 QSqlError::driverText()
-        std::string text() const;             // 综合性错误信息
-        std::string nativeErrorCode() const;  // 对应 QSqlError::nativeErrorCode()
-        bool isValid() const;                 // type() != NoError
+        ErrorCategory category() const;
+        ErrorType type() const;  // 可以基于 category() 返回一个映射的 ErrorType
+        std::string databaseText() const;
+        std::string driverText() const;
+        std::string text() const;
+        std::string nativeErrorCode() const;
+        int nativeErrorCodeNumeric() const;
+        std::string failedQuery() const;
+        std::string constraintName() const;
+        std::optional<int> errorOffsetInQuery() const;
+        bool isValid() const;  // category() != ErrorCategory::NoError
+
+        void setCategory(ErrorCategory category);
+        void setType(ErrorType type);
+        void setDatabaseText(const std::string& text);
+        void setDriverText(const std::string& text);
+        void setNativeErrorCode(const std::string& code);
+        void setNativeErrorCodeNumeric(int code);
+        void setFailedQuery(const std::string& query);
+        void setConstraintName(const std::string& name);
+        void setErrorOffsetInQuery(const std::optional<int>& offset);
+        void clear();
 
       private:
-        ErrorType type_;
+        ErrorCategory category_ = ErrorCategory::NoError;
+        ErrorType legacy_type_ = ErrorType::NoError;
         std::string database_text_;
         std::string driver_text_;
-        std::string native_error_code_;
+        std::string native_error_code_str_;
+        int native_error_code_num_ = 0;
+        std::string failed_query_;
+        std::string constraint_name_;
+        std::optional<int> error_offset_;
     };
 
 }  // namespace cpporm_sqldriver// cpporm_sqldriver/sql_field.h
 #pragma once
-#include <string>
-
-#include "sql_value.h"  // 需要 SqlValue 来表示默认值和当前值
-
-namespace cpporm_sqldriver {
-
-    class SqlField {
-      public:
-        SqlField(const std::string& name = "", SqlValueType type = SqlValueType::Null);  // type 可以是更通用的 SqlValueType
-
-        std::string name() const;
-        SqlValue value() const;         // 当前字段的值 (在 SqlRecord 中更有用)
-        SqlValue defaultValue() const;  // 字段的默认值 (元数据)
-        SqlValueType type() const;      // 字段的 (通用) 数据类型
-        // int typeID() const; // 如果需要更底层的类型 ID
-
-        bool isNull() const;
-        bool isAutoValue() const;  // 是否自增 (元数据)
-        bool isReadOnly() const;   // 是否只读 (元数据)
-        bool isRequired() const;   // 是否NOT NULL (元数据)
-
-        int length() const;     // 字段长度 (元数据)
-        int precision() const;  // 字段精度 (元数据)
-
-        // 内部设置方法 (由驱动填充)
-        void setName(const std::string& name);
-        voidsetValue(const SqlValue& value);  // 用于填充 SqlRecord 中的字段值
-        void setDefaultValue(const SqlValue& defaultValue);
-        void setType(SqlValueType type);
-        // ... 其他 setters
-
-      private:
-        std::string name_;
-        SqlValue current_value_;  // 这个字段在 SqlRecord 中更有意义，单独的 SqlField 通常代表元数据
-        SqlValue default_value_meta_;
-        SqlValueType type_meta_;
-        // ... 其他元数据成员
-    };
-
-}  // namespace cpporm_sqldriver// cpporm_sqldriver/sql_query.h
-#pragma once
-#include <map>  // 用于命名参数绑定
+#include <any>
+#include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "sql_error.h"
-#include "sql_record.h"
 #include "sql_value.h"
 
 namespace cpporm_sqldriver {
 
-    class SqlDatabase;  // 前向声明
+    enum class RequiredStatus { Unknown = -1, Optional = 0, Required = 1 };
 
-    enum class ParamType {
-        In,
-        Out,   // 用于存储过程 (可选)
-        InOut  // 用于存储过程 (可选)
+    class SqlField {
+      public:
+        SqlField(const std::string& name = "", SqlValueType type = SqlValueType::Null, const std::string& db_type_name = "");
+        SqlField(const SqlField& other);
+        SqlField& operator=(const SqlField& other);
+        SqlField(SqlField&& other) noexcept;
+        SqlField& operator=(SqlField&& other) noexcept;
+        ~SqlField();
+
+        std::string name() const;
+        void setName(const std::string& name);
+
+        SqlValueType type() const;
+        void setType(SqlValueType type);
+
+        std::string databaseTypeName() const;
+        void setDatabaseTypeName(const std::string& name);
+        int driverType() const;
+        void setDriverType(int typeId);
+
+        int length() const;
+        void setLength(int len);
+
+        int precision() const;
+        void setPrecision(int prec);
+
+        int scale() const;
+        void setScale(int s);
+
+        bool isNullInValue() const;
+        bool isAutoValue() const;
+        void setAutoValue(bool autoVal);
+
+        bool isReadOnly() const;
+        void setReadOnly(bool ro);
+
+        RequiredStatus requiredStatus() const;
+        void setRequiredStatus(RequiredStatus status);
+
+        SqlValue defaultValue() const;
+        void setDefaultValue(const SqlValue& value);
+
+        SqlValue value() const;
+        void setValue(const SqlValue& value);
+        void clearValue();
+
+        bool isValid() const;
+        bool isGenerated() const;
+        void setGenerated(bool generated);
+
+        bool isPrimaryKeyPart() const;
+        void setPrimaryKeyPart(bool is_pk);
+
+        bool isForeignKeyPart() const;
+        void setForeignKeyPart(bool is_fk);
+        std::optional<std::string> referencedTableName() const;
+        void setReferencedTableName(const std::optional<std::string>& name);
+        std::optional<std::string> referencedColumnName() const;
+        void setReferencedColumnName(const std::optional<std::string>& name);
+
+        std::optional<std::string> collationName() const;
+        void setCollationName(const std::optional<std::string>& name);
+
+        bool isExpression() const;
+        void setIsExpression(bool is_expr);
+        std::optional<std::string> aliasName() const;
+        void setAliasName(const std::optional<std::string>& alias);
+        std::optional<std::string> baseTableName() const;
+        void setBaseTableName(const std::optional<std::string>& name);
+        std::optional<std::string> baseColumnName() const;
+        void setBaseColumnName(const std::optional<std::string>& name);
+        std::optional<std::string> baseSchemaName() const;
+        void setBaseSchemaName(const std::optional<std::string>& name);
+
+        std::any metaData() const;
+        void setMetaData(const std::any& data);
+
+      private:
+        class Private;
+        std::unique_ptr<Private> d;
+    };
+
+}  // namespace cpporm_sqldriver// cpporm_sqldriver/sql_index.h
+#pragma once
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+
+#include "sql_field.h"
+#include "sql_value.h"
+
+namespace cpporm_sqldriver {
+
+    enum class IndexSortOrder { Ascending, Descending, Default };
+    enum class IndexNullsPosition { Default, First, Last };  // For NULLS FIRST/LAST
+
+    struct IndexColumnDefinition {
+        std::string fieldName;
+        IndexSortOrder sortOrder = IndexSortOrder::Default;
+        IndexNullsPosition nullsPosition = IndexNullsPosition::Default;
+        std::optional<std::string> opClass;  // For PostgreSQL operator class
+        // std::optional<std::string> collation; // Per-column collation if supported
+    };
+
+    class SqlIndex {
+      public:
+        SqlIndex(const std::string& cursorName = "", const std::string& name = "");
+        SqlIndex(const SqlIndex& other);
+        SqlIndex& operator=(const SqlIndex& other);
+        SqlIndex(SqlIndex&& other) noexcept;
+        SqlIndex& operator=(SqlIndex&& other) noexcept;
+        ~SqlIndex();
+
+        std::string name() const;
+        void setName(const std::string& name);
+
+        std::string cursorName() const;  // Table name
+        void setCursorName(const std::string& name);
+
+        std::string schemaName() const;
+        void setSchemaName(const std::string& schema);
+
+        bool isUnique() const;
+        void setUnique(bool unique);
+
+        bool isPrimaryKey() const;
+        void setPrimaryKey(bool pk);
+
+        bool isFunctional() const;  // 是否为函数/表达式索引
+        void setFunctional(bool functional);
+
+        void append(const IndexColumnDefinition& colDef);
+        void append(const std::string& fieldName, IndexSortOrder order = IndexSortOrder::Default, IndexNullsPosition nulls = IndexNullsPosition::Default, const std::optional<std::string>& opClass = std::nullopt);
+
+        int count() const;
+        IndexColumnDefinition columnDefinition(int i) const;
+
+        std::string typeMethod() const;  // e.g., BTREE, HASH, GIN, GIST, SPGIST, BRIN
+        void setTypeMethod(const std::string& method);
+
+        std::string condition() const;  // Partial index condition (WHERE clause)
+        void setCondition(const std::string& cond);
+
+        std::vector<std::string> includedColumnNames() const;  // SQL Server INCLUDE, PG INCLUDE
+        void addIncludedColumn(const std::string& columnName);
+
+        std::map<std::string, SqlValue> options() const;  // e.g., FILLFACTOR, WITH (...)
+        void setOption(const std::string& optionName, const SqlValue& value);
+        SqlValue option(const std::string& optionName) const;
+
+        void clear();
+
+      private:
+        class Private;
+        std::unique_ptr<Private> d;
+    };
+
+}  // namespace cpporm_sqldriver// cpporm_sqldriver/sql_query.h
+#pragma once
+#include <functional>
+#include <future>
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+
+#include "i_sql_driver.h"  // Provides ISqlDriver
+#include "sql_enums.h"     // Provides ParamType, CursorMovement, SqlResultNs enums
+#include "sql_error.h"
+#include "sql_field.h"  // Provides SqlField
+#include "sql_record.h"
+#include "sql_result.h"  // Provides SqlResult
+#include "sql_value.h"   // Provides NumericalPrecisionPolicy
+
+namespace cpporm_sqldriver {
+
+    class SqlDatabase;
+
+    enum class BatchExecutionMode {
+        ValuesAsRows,
     };
 
     class SqlQuery {
       public:
-        explicit SqlQuery(SqlDatabase* db = nullptr);  // 传入关联的 SqlDatabase
-        explicit SqlQuery(const std::string& query, SqlDatabase* db = nullptr);
+        explicit SqlQuery(SqlDatabase& db);
+        explicit SqlQuery(const std::string& query, SqlDatabase& db);
         ~SqlQuery();
 
-        // 准备和执行 (模仿 QSqlQuery)
-        bool prepare(const std::string& query);
-        bool exec();                          // 执行已准备的语句
-        bool exec(const std::string& query);  // 准备并执行
+        bool prepare(const std::string& query, SqlResultNs::ScrollMode scroll = SqlResultNs::ScrollMode::ForwardOnly, SqlResultNs::ConcurrencyMode concur = SqlResultNs::ConcurrencyMode::ReadOnly);
+        bool exec();
+        bool exec(const std::string& query);
+        bool setQueryTimeout(int seconds);
 
-        // 参数绑定
-        void bindValue(int pos, const SqlValue& val, ParamType type = ParamType::In);
-        void bindValue(const std::string& placeholderName, const SqlValue& val, ParamType type = ParamType::In);
-        void addBindValue(const SqlValue& val, ParamType type = ParamType::In);  // 用于位置绑定
+        void bindValue(int pos, const SqlValue& val, ParamType type = ParamType::In, int size_hint_for_out_param = 0);
+        void bindValue(const std::string& placeholderName, const SqlValue& val, ParamType type = ParamType::In, int size_hint_for_out_param = 0);
+        void addBindValue(const SqlValue& val, ParamType type = ParamType::In);
+        void bindValues(const std::vector<SqlValue>& values, ParamType type = ParamType::In);
+        void bindValues(const std::map<std::string, SqlValue>& values, ParamType type = ParamType::In);
 
         SqlValue boundValue(int pos) const;
         SqlValue boundValue(const std::string& placeholderName) const;
-        std::map<std::string, SqlValue> boundValues() const;  // 获取所有绑定的命名参数
-        std::vector<SqlValue> positionalBoundValues() const;  // 获取所有绑定的位置参数
+        const std::map<std::string, SqlValue>& namedBoundValues() const;
+        const std::vector<SqlValue>& positionalBoundValues() const;
+        void clearBoundValues();
+        int numberOfBoundValues() const;
 
-        // 结果集导航和数据获取
-        bool next();  // 移动到下一条记录
+        bool next();
+        bool previous();
         bool first();
         bool last();
-        bool previous();
-        bool seek(int index, bool relative = false);  // 定位到特定行
+        bool seek(int index, CursorMovement movement = CursorMovement::Absolute);
 
-        SqlRecord record() const;         // 获取当前行的记录对象
-        SqlValue value(int index) const;  // 直接获取当前行指定列的值
+        SqlRecord recordMetadata() const;
+        SqlRecord currentFetchedRow() const;
+        SqlValue value(int index) const;
         SqlValue value(const std::string& name) const;
+        bool isNull(int index) const;
+        bool isNull(const std::string& name) const;
+        SqlField field(int index) const;
+        SqlField field(const std::string& name) const;
 
-        int at() const;    // 当前行号 (0-based)
-        int size() const;  // 结果集中的行数 (如果驱动支持且有效)
+        int at() const;
+        int size() const;
 
-        // 状态和错误
         bool isActive() const;
-        bool isValid() const;  // 通常指 next() 是否有效
+        bool isValid() const;
+        bool isSelect() const;
+        bool setForwardOnly(bool forward);
+        bool setNumericalPrecisionPolicy(NumericalPrecisionPolicy policy);
         SqlError lastError() const;
         std::string lastQuery() const;
+        std::string executedQuery() const;
 
-        long long numRowsAffected() const;  // DML 操作影响的行数
-        SqlValue lastInsertId() const;      // 获取最后插入的自增ID (如果支持)
+        long long numRowsAffected() const;
+        SqlValue lastInsertId() const;
 
-        void finish();  // 可选，提前释放资源，类似 QSqlQuery::finish()
+        void finish();
+        void clear();
 
-        SqlDatabase* database() const;  // 获取关联的 SqlDatabase
+        SqlDatabase& database() const;
+        ISqlDriver* driver() const;
+        SqlResult* result() const;
 
-        // 批量执行 (如果支持)
-        // bool execBatch(BatchExecutionMode mode = ValuesAsRows); // 名字待定
+        bool execBatch(BatchExecutionMode mode = BatchExecutionMode::ValuesAsRows);
+
+        bool nextResult();
 
       private:
-        // 实现将依赖 Transport 和 Protocol
-        // 需要成员变量来存储:
-        // - 指向关联的 SqlDatabase 的指针 (或引用)
-        // - SQL 语句字符串
-        // - 绑定的参数 (位置参数列表，命名参数映射)
-        // - 当前结果集 (可能是 Transport 返回的某种句柄或缓存的数据)
-        // - 当前记录 SqlRecord
-        // - 当前行号
-        // - 错误状态
-        // - ...
+        class Private;
+        std::unique_ptr<Private> d;
 
-        class Private;  // PImpl
-        Private* d;
+        SqlQuery(const SqlQuery&) = delete;
+        SqlQuery& operator=(const SqlQuery&) = delete;
+        SqlQuery(SqlQuery&&) noexcept;
+        SqlQuery& operator=(SqlQuery&&) noexcept;
     };
 
 }  // namespace cpporm_sqldriver// cpporm_sqldriver/sql_record.h
 #pragma once
+#include <optional>  // For std::optional
 #include <string>
 #include <vector>
 
-#include "sql_field.h"  // 可选
+#include "sql_field.h"  // SqlField 包含元数据和可选的当前值
 #include "sql_value.h"
 
 namespace cpporm_sqldriver {
@@ -7348,127 +7802,315 @@ namespace cpporm_sqldriver {
     class SqlRecord {
       public:
         SqlRecord();
+        ~SqlRecord();
 
+        // 检查和计数
+        bool isEmpty() const;  // 是否包含任何字段
         int count() const;
-        std::string fieldName(int index) const;  // 获取列名
 
-        SqlValue value(int index) const;                // 按索引获取值
-        SqlValue value(const std::string& name) const;  // 按名称获取值
+        // 字段访问
+        SqlField field(int index) const;                // 按索引获取字段对象 (包含元数据和值)
+        SqlField field(const std::string& name) const;  // 按名称获取字段对象
 
+        std::string fieldName(int index) const;  // 仅获取字段名
+
+        // 值访问 (便捷方法)
+        SqlValue value(int index) const;
+        SqlValue value(const std::string& name) const;
         bool isNull(int index) const;
         bool isNull(const std::string& name) const;
 
-        int indexOf(const std::string& name) const;  // 获取名称对应的索引
+        // 查找和包含
+        int indexOf(const std::string& name) const;  // -1 if not found
+        bool contains(const std::string& name) const;
 
-        // SqlField field(int index) const; // 可选: 按索引获取字段元数据和值
-        // SqlField field(const std::string& name) const; // 可选: 按名称获取
-
-        void clear();
-
-        // 内部使用:
-        // 由 SqlQuery 在获取一行数据时填充
-        void addValue(const std::string& name, const SqlValue& value /*, SqlValueType type_hint (可选) */);
-        // 或者更底层的
-        // void setValues(const std::vector<SqlValue>& values);
-        // void setFieldNames(const std::vector<std::string>& names); // 确保与 values 对应
+        // 修改 (通常由驱动内部使用来填充记录)
+        void append(const SqlField& field);  // 添加一个字段 (元数据+值)
+        void insert(int pos, const SqlField& field);
+        void remove(int pos);
+        void replace(int pos, const SqlField& field);
+        void setValue(int index, const SqlValue& val);
+        void setValue(const std::string& name, const SqlValue& val);
+        void setNull(int index);
+        void setNull(const std::string& name);
+        void clear();  // 移除所有字段
 
       private:
-        std::vector<std::string> field_names_;  // 顺序存储列名
-        std::vector<SqlValue> values_;          // 顺序存储列值
-        // 或者: std::vector<SqlField> fields_; // 如果 SqlField 同时存储元数据和当前值
+        class Private;  // PImpl
+        std::unique_ptr<Private> d;
+
+        // SqlRecord 可以被拷贝和赋值
+        SqlRecord(const SqlRecord& other);
+        SqlRecord& operator=(const SqlRecord& other);
+        SqlRecord(SqlRecord&& other) noexcept;
+        SqlRecord& operator=(SqlRecord&& other) noexcept;
+    };
+
+}  // namespace cpporm_sqldriver// cpporm_sqldriver/sql_result.h
+#pragma once
+
+#include <iosfwd>
+#include <map>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "sql_enums.h"  // Provides ParamType, CursorMovement, SqlResultNs enums
+#include "sql_error.h"
+#include "sql_record.h"
+#include "sql_value.h"  // Provides SqlValue, NumericalPrecisionPolicy, SqlValueType
+// #include "sql_field.h" // Forward declare or include if needed
+
+namespace cpporm_sqldriver {
+
+    class SqlField;  // Forward declare for SqlResult::field()
+    // struct SqlFieldExtendedInfo; // Forward declare if used
+
+    class SqlResult {
+      public:
+        virtual ~SqlResult() = default;
+
+        virtual bool prepare(const std::string& query, const std::map<std::string, SqlValueType>* named_bindings_type_hints = nullptr, SqlResultNs::ScrollMode scroll = SqlResultNs::ScrollMode::ForwardOnly, SqlResultNs::ConcurrencyMode concur = SqlResultNs::ConcurrencyMode::ReadOnly) = 0;
+        virtual bool exec() = 0;
+        virtual bool setQueryTimeout(int seconds) = 0;
+        virtual bool setNumericalPrecisionPolicy(NumericalPrecisionPolicy policy) = 0;
+        virtual bool setPrefetchSize(int rows) = 0;
+        virtual int prefetchSize() const = 0;
+
+        virtual void addPositionalBindValue(const SqlValue& value, ParamType type = ParamType::In) = 0;
+        virtual void setNamedBindValue(const std::string& placeholder, const SqlValue& value, ParamType type = ParamType::In) = 0;
+        virtual void bindBlobStream(int pos, std::shared_ptr<std::istream> stream, long long size = -1, ParamType type = ParamType::In) = 0;
+        virtual void bindBlobStream(const std::string& placeholder, std::shared_ptr<std::istream> stream, long long size = -1, ParamType type = ParamType::In) = 0;
+        virtual void clearBindValues() = 0;
+        virtual void reset() = 0;
+        virtual bool setForwardOnly(bool forward) = 0;
+
+        virtual bool fetchNext(SqlRecord& record_buffer) = 0;
+        virtual bool fetchPrevious(SqlRecord& record_buffer) = 0;
+        virtual bool fetchFirst(SqlRecord& record_buffer) = 0;
+        virtual bool fetchLast(SqlRecord& record_buffer) = 0;
+        virtual bool fetch(int index, SqlRecord& record_buffer, CursorMovement movement = CursorMovement::Absolute) = 0;
+
+        virtual SqlValue data(int column_index) = 0;
+        virtual std::shared_ptr<std::istream> openReadableBlobStream(int column_index) = 0;
+        virtual std::shared_ptr<std::ostream> openWritableBlobStream(int column_index, long long initial_size_hint = 0) = 0;
+
+        virtual bool isNull(int column_index) = 0;
+        virtual SqlRecord recordMetadata() const = 0;
+        virtual SqlRecord currentFetchedRow() const = 0;
+        virtual SqlField field(int column_index) const = 0;
+        // virtual SqlFieldExtendedInfo fieldExtendedInfo(int column_index) const = 0;
+
+        virtual long long numRowsAffected() = 0;
+        virtual SqlValue lastInsertId() = 0;
+        virtual int columnCount() const = 0;
+        virtual int size() = 0;
+        virtual int at() const = 0;
+
+        virtual bool isActive() const = 0;
+        virtual bool isValid() const = 0;
+        virtual SqlError error() const = 0;
+        virtual const std::string& lastQuery() const = 0;
+        virtual const std::string& preparedQueryText() const = 0;
+
+        virtual void finish() = 0;
+        virtual void clear() = 0;
+
+        virtual bool nextResult() = 0;
+
+        virtual SqlValue getOutParameter(int pos) const = 0;
+        virtual SqlValue getOutParameter(const std::string& name) const = 0;
+        virtual std::map<std::string, SqlValue> getAllOutParameters() const = 0;
+
+        virtual bool setNamedBindingSyntax(SqlResultNs::NamedBindingSyntax syntax) = 0;
     };
 
 }  // namespace cpporm_sqldriver// cpporm_sqldriver/sql_value.h
 #pragma once
-#include <chrono>  // 用于时间类型
-#include <optional>
-#include <string>
-#include <variant>
-#include <vector>
-
-// 如果仍然想用 Qt 的时间类型，可以包含它们，但不依赖 QtSql
 #include <QByteArray>
 #include <QDate>
-#include <QDateTime>  // 假设允许依赖 Qt Core
+#include <QDateTime>
 #include <QTime>
+#include <QVariant>
+#include <any>
+#include <chrono>
+#include <iosfwd>
+#include <memory>
+#include <optional>
+#include <string>
+#include <typeinfo>
+#include <variant>
+#include <vector>
 
 namespace cpporm_sqldriver {
 
     enum class SqlValueType {
         Null,
         Bool,
-        Int,
-        LongLong,
+        Int8,
+        UInt8,
+        Int16,
+        UInt16,
+        Int32,
+        UInt32,
+        Int64,
+        UInt64,
+        Float,
         Double,
+        LongDouble,
         String,
+        FixedString,
         ByteArray,
-        Date,      // 可以是 std::chrono::year_month_day 或 QDate
-        Time,      // 可以是 std::chrono::hh_mm_ss 或 QTime
-        DateTime,  // 可以是 std::chrono::system_clock::time_point 或 QDateTime
-        // ... 其他可能的原生类型
+        BinaryLargeObject,
+        CharacterLargeObject,
+        Date,
+        Time,
+        DateTime,
+        Timestamp,
+        Interval,
+        Decimal,
+        Numeric,
+        Json,
+        Xml,
+        Array,
+        RowId,
+        Custom,
+        Unknown
     };
+
+    enum class NumericalPrecisionPolicy { LowPrecision, HighPrecision, ExactRepresentation };
 
     class SqlValue {
       public:
-        using NativeTimePoint = std::chrono::system_clock::time_point;  // 示例
-        using NativeDate = std::chrono::year_month_day;                 // 示例
+        using ChronoDate = std::chrono::year_month_day;
+        using ChronoTime = std::chrono::nanoseconds;
+        using ChronoDateTime = std::chrono::system_clock::time_point;
+        using BlobInputStream = std::shared_ptr<std::istream>;
+        using BlobOutputStream = std::shared_ptr<std::ostream>;
+        using ClobInputStream = std::shared_ptr<std::basic_istream<char>>;
+        using ClobOutputStream = std::shared_ptr<std::basic_ostream<char>>;
 
-        // 构造函数
-        SqlValue();  // Null
+        SqlValue();
+        SqlValue(std::nullptr_t);
         SqlValue(bool val);
-        SqlValue(int val);
-        SqlValue(long long val);
+        SqlValue(int8_t val);
+        SqlValue(uint8_t val);
+        SqlValue(int16_t val);
+        SqlValue(uint16_t val);
+        SqlValue(int32_t val);
+        SqlValue(uint32_t val);
+        SqlValue(int64_t val);
+        SqlValue(uint64_t val);
+        SqlValue(float val);
         SqlValue(double val);
-        SqlValue(const char* val);
-        SqlValue(const std::string& val);
-        SqlValue(const QByteArray& val);  // 如果允许 Qt Core
-        SqlValue(const QDate& val);       // 如果允许 Qt Core
-        SqlValue(const QTime& val);       // 如果允许 Qt Core
-        SqlValue(const QDateTime& val);   // 如果允许 Qt Core
-        // SqlValue(const NativeDate& val);
-        // SqlValue(const NativeTimePoint& val);
+        SqlValue(long double val);
+        SqlValue(const char* val, SqlValueType type_hint = SqlValueType::String);
+        SqlValue(const std::string& val, SqlValueType type_hint = SqlValueType::String);
+        SqlValue(const std::vector<unsigned char>& val);
 
-        // 类型检查和转换 (模仿 QVariant)
+        // SqlValue(const SqlDecimal& val);
+        // SqlValue(const SqlJsonDocument& val);
+        // SqlValue(const SqlXmlDocument& val);
+        // template<typename T> SqlValue(const SqlArray<T>& val);
+
+        SqlValue(BlobInputStream stream_handle, long long size = -1);
+        SqlValue(ClobInputStream stream_handle, long long size = -1, const std::string& charset = "UTF-8");
+
+        SqlValue(const QByteArray& val);
+        SqlValue(const QDate& val);
+        SqlValue(const QTime& val);
+        SqlValue(const QDateTime& val);
+
+        SqlValue(const ChronoDate& val);
+        SqlValue(const ChronoTime& val);
+        SqlValue(const ChronoDateTime& val);
+
+        SqlValue(const SqlValue& other);
+        SqlValue& operator=(const SqlValue& other);
+        SqlValue(SqlValue&& other) noexcept;
+        SqlValue& operator=(SqlValue&& other) noexcept;
+        ~SqlValue();
+
         bool isNull() const;
-        bool isValid() const;       // 通常 SqlValue 总是 valid，除非特殊状态
-        SqlValueType type() const;  // 或者 int typeId() const;
+        bool isValid() const;
+        SqlValueType type() const;
+        const char* typeName() const;
+        std::string driverTypeName() const;
+        void setDriverTypeName(const std::string& name);
 
         bool toBool(bool* ok = nullptr) const;
-        int toInt(bool* ok = nullptr) const;
-        long long toLongLong(bool* ok = nullptr) const;
-        double toDouble(bool* ok = nullptr) const;
-        std::string toString(bool* ok = nullptr) const;  // 或者 QString
+        int8_t toInt8(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
+        uint8_t toUInt8(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
+        int16_t toInt16(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
+        uint16_t toUInt16(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
+        int32_t toInt32(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;    // Corresponds to 'int'
+        uint32_t toUInt32(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;  // Corresponds to 'unsigned int'
+        int64_t toInt64(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;    // Corresponds to 'long long'
+        uint64_t toUInt64(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;  // Corresponds to 'unsigned long long'
+        float toFloat(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
+        double toDouble(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
+        long double toLongDouble(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
+        std::string toString(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
+        std::vector<unsigned char> toStdVectorUChar(bool* ok = nullptr) const;
+
+        // SqlDecimal toDecimal(bool* ok = nullptr) const;
+        // SqlJsonDocument toJsonDocument(bool* ok = nullptr) const;
+        // SqlXmlDocument toXmlDocument(bool* ok = nullptr) const;
+        // template<typename T> std::optional<SqlArray<T>> toArray(bool* ok = nullptr) const;
+
+        BlobInputStream toBlobInputStream(bool* ok = nullptr) const;
+        ClobInputStream toClobInputStream(bool* ok = nullptr) const;
+
         QByteArray toByteArray(bool* ok = nullptr) const;
         QDate toDate(bool* ok = nullptr) const;
         QTime toTime(bool* ok = nullptr) const;
         QDateTime toDateTime(bool* ok = nullptr) const;
-        // NativeDate toNativeDate(bool* ok = nullptr) const;
-        // NativeTimePoint toNativeTimePoint(bool* ok =nullptr) const;
 
-        // 静态工厂方法 (可选)
-        static SqlValue fromString(const std::string& s);
-        // ...
+        ChronoDate toChronoDate(bool* ok = nullptr) const;
+        ChronoTime toChronoTime(bool* ok = nullptr) const;
+        ChronoDateTime toChronoDateTime(bool* ok = nullptr) const;
+
+        bool operator==(const SqlValue& other) const;
+        bool operator!=(const SqlValue& other) const;
+
+        void clear();
+
+        QVariant toQVariant() const;
+        static SqlValue fromQVariant(const QVariant& qv);
+
+        std::any toStdAny() const;
+        static SqlValue fromStdAny(const std::any& val, SqlValueType type_hint = SqlValueType::Custom);
 
       private:
-        // 使用 std::variant 作为底层存储示例
-        std::variant<std::monostate,  // 代表 Null
-                     bool,
-                     int,
-                     long long,
-                     double,
-                     std::string,
-                     QByteArray,  // 如果允许
-                     QDate,       // 如果允许
-                     QTime,       // 如果允许
-                     QDateTime    // 如果允许
-                     // NativeDate,
-                     // NativeTimePoint
-                     >
-            value_;
-
-        // 或者使用 std::any，但类型转换会更麻烦
-        // std::any value_;
-        // SqlValueType current_type_;
+        using StorageType = std::variant<std::monostate,
+                                         bool,
+                                         int8_t,
+                                         uint8_t,
+                                         int16_t,
+                                         uint16_t,
+                                         int32_t,
+                                         uint32_t,
+                                         int64_t,
+                                         uint64_t,
+                                         float,
+                                         double,
+                                         long double,
+                                         std::string,
+                                         std::vector<unsigned char>,
+                                         BlobInputStream,
+                                         ClobInputStream,
+                                         QByteArray,
+                                         QDate,
+                                         QTime,
+                                         QDateTime,
+                                         ChronoDate,
+                                         ChronoTime,
+                                         ChronoDateTime,
+                                         std::any>;
+        StorageType value_;
+        SqlValueType current_type_enum_ = SqlValueType::Null;
+        std::string driver_type_name_;
+        void updateCurrentTypeEnum();
     };
 
 }  // namespace cpporm_sqldriver
