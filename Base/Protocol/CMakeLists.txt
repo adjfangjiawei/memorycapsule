@@ -1,4 +1,4 @@
 add_subdirectory(BoltProtocol)
-
+add_subdirectory(MysqlProtocol)
 add_library(Protocol INTERFACE)
-target_link_libraries(Protocol INTERFACE BoltProtocol)
+target_link_libraries(Protocol INTERFACE BoltProtocol MysqlProtocol)

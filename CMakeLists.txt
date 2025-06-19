@@ -43,8 +43,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_TOOLCHAIN_FILE "/media/root/newvolumn/fjw/vcpkg/scripts/buildsystems/vcpkg.cmake"
     CACHE STRING "Vcpkg toolchain file")
 
-# # 假设使用 Qt6
-# find_package(Qt6 REQUIRED COMPONENTS Core Sql)
+# # # 假设使用 Qt6
+find_package(Qt6 REQUIRED COMPONENTS Core Sql)
+find_package(unofficial-libmysql REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(Boost REQUIRED COMPONENTS asio beast json system)
 find_package(spdlog REQUIRED)
