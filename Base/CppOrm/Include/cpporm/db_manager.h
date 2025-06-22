@@ -1,36 +1,38 @@
+// cpporm/db_manager.h
 #ifndef cpporm_DB_MANAGER_H
 #define cpporm_DB_MANAGER_H
 
 #include <expected>
 #include <memory>
-#include <string>  // 使用 std::string
+#include <string>
 
 #include "cpporm/error.h"
-#include "sqldriver/sql_connection_parameters.h"  // 新的连接参数
-#include "sqldriver/sql_database.h"               // 新的数据库对象
-#include "sqldriver/sql_driver_manager.h"         // 新的驱动管理器
+#include "sqldriver/sql_connection_parameters.h"
+#include "sqldriver/sql_database.h"  // Now returns SqlDatabase directly
+#include "sqldriver/sql_driver_manager.h"
 
 namespace cpporm {
 
     struct DbConfig {
-        std::string driver_type;  // 例如 "MYSQL", "PSQL", "SQLITE"
+        std::string driver_type;
         std::string host_name = "127.0.0.1";
         int port = -1;
         std::string database_name;
         std::string user_name;
         std::string password;
         std::string connect_options;
-        std::string client_charset;   // 例如 "utf8mb4"
-        std::string connection_name;  // 连接名，如果为空则自动生成
+        std::string client_charset;
+        std::string connection_name;  // Optional: if SqlDatabase is to be named for later retrieval (not used by Session directly if Session owns the handle)
 
         static std::string generateUniqueConnectionName() {
             static long long counter = 0;
-            return "cpporm_sqldrv_conn_" + std::to_string(++counter);
+            // Using a more descriptive prefix for SqlDatabase connection names if they are still used by DriverManager for anything
+            return "cpporm_sqldb_conn_" + std::to_string(++counter);
         }
 
         cpporm_sqldriver::ConnectionParameters toDriverParameters() const {
             cpporm_sqldriver::ConnectionParameters params;
-            params.setDriverType(driver_type);  // 驱动类型现在由 SqlDriverManager 处理
+            // driver_type is used by SqlDriverManager to get the factory, not a parameter for SqlDatabase::open
             params.setHostName(host_name);
             if (port > 0) {
                 params.setPort(port);
@@ -41,7 +43,7 @@ namespace cpporm {
             if (!connect_options.empty()) {
                 params.setConnectOptions(connect_options);
             }
-            // client_charset 在 SqlDatabase 打开后单独设置
+            // client_charset is handled separately after open if needed
             return params;
         }
     };
@@ -50,19 +52,18 @@ namespace cpporm {
       public:
         DbManager() = delete;
 
-        // openDatabase 返回 std::expected<std::string, Error>
-        // connection_name 现在是 std::string
-        static std::expected<std::string, Error> openDatabase(const DbConfig &config);
+        // Changed return type: directly returns the SqlDatabase object (or an error)
+        static std::expected<cpporm_sqldriver::SqlDatabase, Error> openDatabase(const DbConfig &config);
 
-        // getDatabase 返回 cpporm_sqldriver::SqlDatabase
-        // connection_name_str 现在是 std::string
+        // The following methods become problematic if SqlDriverManager doesn't manage active SqlDatabase instances by name.
+        // Session will now own its SqlDatabase handle.
+        // These might need to be removed or re-thought if global access to specific connections by name is truly needed.
+        // For now, I'll comment them out as Session will get its handle from openDatabase.
+        /*
         static cpporm_sqldriver::SqlDatabase getDatabase(const std::string &connection_name_str = cpporm_sqldriver::SqlDriverManager::defaultConnectionName());
-
-        // closeDatabase connection_name_str 现在是 std::string
         static void closeDatabase(const std::string &connection_name_str);
-
-        // isConnectionValid connection_name_str 现在是 std::string
         static bool isConnectionValid(const std::string &connection_name_str);
+        */
     };
 
 }  // namespace cpporm

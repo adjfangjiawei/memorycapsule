@@ -21,8 +21,9 @@
 #include "cpporm/query_builder.h"
 #include "cpporm/session_fwd.h"
 #include "cpporm/session_types.h"
-#include "sqldriver/sql_database.h"
-#include "sqldriver/sql_driver_manager.h"
+#include "sqldriver/sql_database.h"  // For cpporm_sqldriver::SqlDatabase
+// SqlDriverManager is not directly needed by Session if it receives an SqlDatabase handle
+// #include "sqldriver/sql_driver_manager.h"
 #include "sqldriver/sql_query.h"
 #include "sqldriver/sql_value.h"
 
@@ -36,7 +37,8 @@ namespace cpporm {
 
     class Session : public IQueryExecutor {
       public:
-        explicit Session(const std::string &connection_name);
+        // Removed: explicit Session(const std::string &connection_name);
+        // Constructor now takes an rvalue reference to an SqlDatabase object
         explicit Session(cpporm_sqldriver::SqlDatabase &&db_handle_rval);
 
         Session(const Session &) = delete;
@@ -50,7 +52,8 @@ namespace cpporm {
         template <typename T>
         QueryBuilder Model() {
             static_assert(std::is_base_of<ModelBase, T>::value, "T must be a descendant of cpporm::ModelBase");
-            return QueryBuilder(this, connection_name_, &(T::getModelMeta()));
+            // Pass this->connection_name_ (which is now derived from db_handle_)
+            return QueryBuilder(this, this->connection_name_, &(T::getModelMeta()));
         }
         QueryBuilder Table(const std::string &table_name);
         QueryBuilder MakeQueryBuilder();
@@ -156,7 +159,7 @@ namespace cpporm {
 
         const std::string &getConnectionName() const;
         cpporm_sqldriver::SqlDatabase &getDbHandle();
-        const cpporm_sqldriver::SqlDatabase &getDbHandle() const;  // Added const overload
+        const cpporm_sqldriver::SqlDatabase &getDbHandle() const;
 
         const cpporm::OnConflictClause *getTempOnConflictClause() const;
         void clearTempOnConflictClause();
@@ -168,14 +171,13 @@ namespace cpporm {
         static cpporm_sqldriver::SqlValue queryValueToSqlValue(const QueryValue &qv);
         static QueryValue sqlValueToQueryValue(const cpporm_sqldriver::SqlValue &sv);
 
-        // Made public static for access from internal::execute_ddl_query
         static std::pair<cpporm_sqldriver::SqlQuery, Error> execute_query_internal(cpporm_sqldriver::SqlDatabase &db_conn_ref, const std::string &sql, const std::vector<cpporm_sqldriver::SqlValue> &bound_params);
 
       private:
+        friend class internal_batch_helpers::FriendAccess;  // Grant access for batch helpers
+
         Error mapRowToModel(cpporm_sqldriver::SqlQuery &query, ModelBase &model, const ModelMeta &meta);
         internal::SessionModelDataForWrite extractModelData(const ModelBase &model_instance, const ModelMeta &meta, bool for_update = false, bool include_timestamps_even_if_null = false);
-
-        friend class internal_batch_helpers::FriendAccess;
 
         void autoSetTimestamps(ModelBase &model_instance, const ModelMeta &meta, bool is_create_op);
 
@@ -183,12 +185,12 @@ namespace cpporm {
         Error processPreloads(const QueryBuilder &qb, std::vector<std::unique_ptr<ModelBase>> &loaded_models);
         Error executePreloadForAssociation(const AssociationMeta &assoc_meta, const ModelMeta &parent_model_meta, std::vector<ModelBase *> &parent_models_raw_ptr, const std::string &remaining_nested_preload_path = "");
 
-        std::string connection_name_;
-        cpporm_sqldriver::SqlDatabase db_handle_;
-        bool is_explicit_transaction_handle_;
+        std::string connection_name_;              // Still useful for QueryBuilder, derived from db_handle_
+        cpporm_sqldriver::SqlDatabase db_handle_;  // Session now OWNS the database handle
+        bool is_explicit_transaction_handle_;      // True if this Session object represents an explicit transaction
         std::unique_ptr<OnConflictClause> temp_on_conflict_clause_;
     };
 
 }  // namespace cpporm
 
-#endif
+#endif  // cpporm_SESSION_CORE_H

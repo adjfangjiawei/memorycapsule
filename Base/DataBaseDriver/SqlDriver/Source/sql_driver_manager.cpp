@@ -2,11 +2,12 @@
 #include "sqldriver/sql_driver_manager.h"
 
 #include <map>
+#include <memory>  // For std::unique_ptr
 #include <mutex>
 #include <stdexcept>  // For std::runtime_error
 
 #include "sqldriver/i_sql_driver.h"
-#include "sqldriver/sql_connection_parameters.h"  // For ConnectionParameters in database() if needed
+#include "sqldriver/sql_connection_parameters.h"
 #include "sqldriver/sql_database.h"
 #include "sqldriver/sql_error.h"
 
@@ -14,106 +15,137 @@ namespace cpporm_sqldriver {
 
     // --- Static Data Accessor ---
     SqlDriverManager::ManagerData& SqlDriverManager::data() {
-        static ManagerData manager_data;
+        static ManagerData manager_data;  // C++11 guarantees thread-safe initialization
         return manager_data;
     }
 
     // --- Connection Management ---
     SqlDatabase SqlDriverManager::addDatabase(const std::string& driverType, const std::string& connectionName) {
-        std::lock_guard<std::mutex> lock(data().managerMutex);
+        DriverFactory factory_to_call = nullptr;
+        {  // Scope for lock
+            std::lock_guard<std::mutex> lock(data().managerMutex);
+            auto& factories = data().driverFactories;
+            auto factory_it = factories.find(driverType);
 
-        auto& factories = data().driverFactories;
-        auto factory_it = factories.find(driverType);
+            if (factory_it == factories.end()) {
+                // Driver type not registered, return SqlDatabase that will be invalid
+                // SqlDatabase constructor will set an error if driverInstance is null
+                return SqlDatabase(driverType, connectionName, nullptr);
+            }
+            factory_to_call = factory_it->second;  // Get the factory
+        }  // Mutex released here
 
-        if (factory_it == factories.end()) {
-            // 驱动类型未注册，返回一个带有空驱动的 SqlDatabase
-            // SqlDatabase 构造函数会处理空驱动的情况
-            return SqlDatabase(driverType, connectionName, nullptr);
+        std::unique_ptr<ISqlDriver> driverInstance = nullptr;
+        if (factory_to_call) {
+            try {
+                driverInstance = factory_to_call();  // Call factory outside the lock
+            } catch (const std::exception& e) {
+                // Factory call threw an exception. driverInstance remains nullptr.
+                // The SqlDatabase constructor will handle the null driverInstance.
+                // Optionally log here, but SqlDatabase constructor will also "know".
+                // For example: some_logging_system("Driver factory for " + driverType + " threw: " + e.what());
+            } catch (...) {
+                // Catch all for other potential issues from factory.
+            }
         }
 
-        std::unique_ptr<ISqlDriver> driverInstance = factory_it->second();  // 调用工厂函数
         if (!driverInstance) {
-            // 工厂未能创建驱动实例
+            // Factory failed to create driver instance or factory_to_call was null after lock release.
             return SqlDatabase(driverType, connectionName, nullptr);
         }
 
-        // 创建并返回 SqlDatabase 对象，SqlDatabase 对象现在拥有 driverInstance
         return SqlDatabase(driverType, connectionName, std::move(driverInstance));
     }
 
     SqlDatabase SqlDriverManager::database(const std::string& connectionName, bool open) {
-        // 这个简化版本主要依赖于 addDatabase 的逻辑。
-        // 它需要一个 driverType 来创建数据库。
-        // 如果没有提供 driverType，并且没有预先配置的与 connectionName 关联的 driverType，
-        // 则此函数无法确定要使用哪个驱动。
+        // This method's purpose is primarily to support Qt's QSqlDatabase::database() model.
+        // In our design, DbManager::openDatabase is the preferred way to get a configured and opened SqlDatabase.
+        // If called with a non-default name, it implies a pre-configured, named connection,
+        // which SqlDriverManager doesn't directly manage beyond driver factories.
+        // For the default connection, it might try to use the first registered driver.
 
-        // 假设：如果 connectionName 是默认连接名，并且有注册的驱动，则使用第一个注册的驱动。
-        // 否则，用户应该使用 addDatabase 指定驱动类型。
-        // 这是一个简化的处理，实际场景可能需要更复杂的配置管理。
+        std::string driverTypeToUse;
+        DriverFactory factory_to_call = nullptr;
 
-        std::string driverToUse;
-        std::unique_ptr<ISqlDriver> driverInstance = nullptr;
-
-        {
+        {  // Scope for lock
             std::lock_guard<std::mutex> lock(data().managerMutex);
-            if (connectionName == defaultConnectionName() && !data().driverFactories.empty()) {
-                driverToUse = data().driverFactories.begin()->first;  // 使用第一个注册的驱动作为默认
-                driverInstance = data().driverFactories.begin()->second();
+            auto& factories = data().driverFactories;
+
+            if (connectionName == defaultConnectionName()) {
+                if (!factories.empty()) {
+                    driverTypeToUse = factories.begin()->first;
+                    factory_to_call = factories.begin()->second;
+                } else {
+                    // No drivers registered, cannot create default connection
+                    return SqlDatabase("NoDriversRegistered", connectionName, nullptr);
+                }
             } else {
-                // 如果 connectionName 不是默认的，或者没有驱动注册，
-                // 我们无法安全地选择驱动。返回一个无效的 SqlDatabase。
-                // 或者，如果有一个机制通过 connectionName 查找 driverType，则在这里使用。
-                // 目前，我们返回一个没有驱动的 SqlDatabase，isValid() 会是 false。
-                return SqlDatabase("UnknownDriver", connectionName, nullptr);
+                // For non-default connection names, this manager doesn't store specific
+                // configurations or active instances. It can only create a new SqlDatabase
+                // if `connectionName` is treated as `driverType`.
+                // This is likely a misuse if `connectionName` is dynamic like "cpporm_sqldrv_conn_1".
+                // However, if a user explicitly calls SqlDriverManager::database("MYSQL", true),
+                // it should work like addDatabase("MYSQL", "MYSQL").
+                // For robustness, let's assume `connectionName` here could be a `driverType`.
+                auto factory_it = factories.find(connectionName);
+                if (factory_it != factories.end()) {
+                    driverTypeToUse = factory_it->first;
+                    factory_to_call = factory_it->second;
+                } else {
+                    // Cannot determine driver type for this connectionName.
+                    return SqlDatabase("UnknownDriverForConnectionName", connectionName, nullptr);
+                }
             }
-        }
-        // 确保在创建 SqlDatabase 之前 driverInstance 被正确创建
-        if (!driverInstance && !driverToUse.empty()) {  // 如果上面逻辑取了 driverToUse 但 factory 没执行
-            std::lock_guard<std::mutex> lock(data().managerMutex);
-            auto factory_it = data().driverFactories.find(driverToUse);
-            if (factory_it != data().driverFactories.end()) {
-                driverInstance = factory_it->second();
+        }  // Mutex released
+
+        std::unique_ptr<ISqlDriver> driverInstance = nullptr;
+        if (factory_to_call) {
+            try {
+                driverInstance = factory_to_call();
+            } catch (...) { /* Factory failed */
             }
+        } else {
+            // This case should ideally not be hit if factory_it was valid.
+            // Could happen if defaultConnectionName path had no factories.
+            return SqlDatabase(driverTypeToUse.empty() ? "UnknownDriver" : driverTypeToUse, connectionName, nullptr);
         }
 
-        SqlDatabase db = SqlDatabase(driverToUse, connectionName, std::move(driverInstance));
+        SqlDatabase db(driverTypeToUse, connectionName, std::move(driverInstance));
 
         if (open && db.isValid()) {
-            // 要打开连接，我们需要 ConnectionParameters。
-            // 在这个简化模型中，我们没有存储与 connectionName 关联的参数。
-            // 因此，尝试使用 db 对象内部可能已有的 m_parameters 打开，
-            // 或者如果参数为空，则 open() 可能会失败或使用驱动的默认值。
-            // 更好的做法是要求用户在调用 database() 后，显式设置参数并调用 open()。
-            // 或者 database() 应该能够从某处检索这些参数。
-            // 为保持与之前行为的某种一致性（虽然有缺陷），这里尝试用db内部的参数打开：
-            if (!db.connectionParameters().empty()) {  // SqlDatabase::connectionParameters() 是 public const
-                db.open(db.connectionParameters());
-            } else {
-                // 如果没有参数，open() 行为取决于 SqlDatabase::open() 的具体实现
-                // 它可能会尝试用空参数打开，这通常会导致驱动使用默认值或失败
-                db.open();
-            }
-            // 注意：这里的 open 调用的错误状态会由 db.lastError() 反映。
+            // To open, SqlDatabase::open() needs ConnectionParameters.
+            // The `db` object has its own m_parameters, which are initially empty.
+            // This `open()` call will likely use default parameters or fail if the driver requires specific ones.
+            // Unlike DbManager, SqlDriverManager doesn't have the `DbConfig` to populate detailed params.
+            // This means the `open=true` here is less useful unless default driver params are sufficient.
+            db.open();  // Attempt to open with internal (likely default/empty) parameters
+                        // The success/failure and error are handled within db.open() and accessible via db.lastError().
         }
         return db;
     }
 
     void SqlDriverManager::removeDatabase(const std::string& /*connectionName*/) {
         std::lock_guard<std::mutex> lock(data().managerMutex);
-        // 当前设计中，SqlDriverManager 不管理 SqlDatabase 实例的生命周期，
-        // 因此 removeDatabase 主要是概念性的，或者用于移除已命名的配置（如果将来实现）。
-        // 目前无操作。
+        // In the current design, SqlDriverManager does not manage SqlDatabase instances
+        // or named configurations beyond factories. So, this is largely a conceptual no-op
+        // unless we expand its role to store/manage configurations per connectionName.
     }
 
-    bool SqlDriverManager::contains(const std::string& /*connectionName*/) {
+    bool SqlDriverManager::contains(const std::string& connectionName) {
         std::lock_guard<std::mutex> lock(data().managerMutex);
-        // 类似于 removeDatabase, 如果不存储实例或配置，此函数意义不大。
-        // 它可以用来检查是否有与 connectionName 匹配的预配置（如果实现）。
-        // 或者，如果 connectionName 暗示了驱动类型，可以检查该驱动类型是否已注册。
-        return false;  // 占位符
+        // If we only manage driver factories by type, checking if a 'connectionName'
+        // (which could be dynamic) "contains" is tricky.
+        // It could mean: "is there a configuration for this name?" (not implemented)
+        // or "is the default connection name configured?"
+        // or "is connectionName a registered driver type?".
+        // For now, if it's the default connection name, it "contains" if any driver is registered.
+        // If it's another name, it "contains" if that name is a registered driver type.
+        if (connectionName == defaultConnectionName()) {
+            return !data().driverFactories.empty();
+        }
+        return data().driverFactories.count(connectionName) > 0;
     }
 
-    // --- 驱动信息 ---
     std::vector<std::string> SqlDriverManager::drivers() {
         std::lock_guard<std::mutex> lock(data().managerMutex);
         std::vector<std::string> driver_names;
@@ -130,11 +162,13 @@ namespace cpporm_sqldriver {
     }
 
     std::string SqlDriverManager::defaultConnectionName() {
+        // No lock needed for reading a const static member after initialization
+        // or if data().defaultConnName is itself thread-safe / constant after init.
+        // However, to be consistent with `data()` access:
         std::lock_guard<std::mutex> lock(data().managerMutex);
         return data().defaultConnName;
     }
 
-    // --- 驱动注册 ---
     bool SqlDriverManager::registerDriver(const std::string& driverName, DriverFactory factory) {
         if (driverName.empty() || !factory) {
             return false;
