@@ -89,14 +89,17 @@ namespace cpporm_sqldriver {
 
         bool nextResult();
 
+        // Move operations made public
+        SqlQuery(SqlQuery&&) noexcept;
+        SqlQuery& operator=(SqlQuery&&) noexcept;
+
       private:
         class Private;
         std::unique_ptr<Private> d;
 
         SqlQuery(const SqlQuery&) = delete;
         SqlQuery& operator=(const SqlQuery&) = delete;
-        SqlQuery(SqlQuery&&) noexcept;
-        SqlQuery& operator=(SqlQuery&&) noexcept;
+        // Moved constructors/assignment are now public
     };
 
 }  // namespace cpporm_sqldriver

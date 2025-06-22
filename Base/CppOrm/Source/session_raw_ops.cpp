@@ -1,58 +1,45 @@
-// cpporm/session_raw_ops.cpp
+#include <QDebug>        // qWarning
+#include <QString>       // For QString in ExecRaw interface
+#include <QVariantList>  // For QVariantList in ExecRaw interface
+
 #include "cpporm/error.h"
 #include "cpporm/session.h"
-
-#include <QDebug>    // For qWarning
-#include <QSqlError> // For QSqlError details
-#include <QSqlQuery>
-#include <QString>
-#include <QVariantList>
+#include "cpporm_sqldriver/sql_query.h"  // SqlQuery
+#include "cpporm_sqldriver/sql_value.h"  // SqlValue
 
 namespace cpporm {
 
-std::expected<long long, Error> Session::ExecRaw(const QString &sql,
-                                                 const QVariantList &args) {
-  if (sql.isEmpty()) {
-    return std::unexpected(Error(ErrorCode::StatementPreparationError,
-                                 "Raw SQL query string is empty."));
-  }
-  // `execute_query_internal` is a static private helper method of Session,
-  // defined in session.cpp
-  auto [query_obj, exec_err] =
-      execute_query_internal(this->db_handle_, sql, args);
+    // ExecRaw 保持接收 QString 和 QVariantList 的接口以方便 Qt 用户，内部转换为 SqlDriver 类型。
+    std::expected<long long, Error> Session::ExecRaw(const QString &sql_qstr, const QVariantList &args_qvariantlist) {
+        std::string sql_std_str = sql_qstr.toStdString();
+        if (sql_std_str.empty()) {
+            return std::unexpected(Error(ErrorCode::StatementPreparationError, "Raw SQL query string is empty."));
+        }
 
-  if (exec_err) {
-    qWarning() << "Session::ExecRaw: Execution failed for SQL:" << sql
-               << "Args:" << args
-               << "Error:" << QString::fromStdString(exec_err.toString());
-    return std::unexpected(exec_err);
-  }
+        std::vector<cpporm_sqldriver::SqlValue> args_sqlvalue;
+        args_sqlvalue.reserve(args_qvariantlist.size());
+        for (const QVariant &qv : args_qvariantlist) {
+            // QueryBuilder::qvariantToQueryValue 应该是一个公共静态方法
+            // Session::queryValueToSqlValue 也是公共静态方法
+            args_sqlvalue.push_back(Session::queryValueToSqlValue(QueryBuilder::qvariantToQueryValue(qv)));
+        }
 
-  // QSqlQuery::numRowsAffected() behavior:
-  // - For DML (INSERT, UPDATE, DELETE): Returns the number of rows affected.
-  // - For SELECT: Behavior is driver-dependent. Some return -1, some the number
-  // of rows fetched so far.
-  // - For DDL (CREATE, ALTER, DROP): Behavior is driver-dependent. Often -1 or
-  // 0. GORM's Exec() is typically for DML/DDL and returns RowsAffected. If the
-  // user intends to fetch rows from a SELECT, they should use a different raw
-  // query method (e.g., one that returns QSqlQuery or maps to models/structs).
-  long long rows_affected = query_obj.numRowsAffected();
+        auto [sql_query_obj, exec_err] = execute_query_internal(this->db_handle_, sql_std_str, args_sqlvalue);
 
-  // It's possible that for some DDL statements, numRowsAffected might be -1
-  // even if successful. We might want to consider query.isActive() as a sign of
-  // success for DDL if numRowsAffected is inconclusive. However, for a generic
-  // ExecRaw, returning numRowsAffected is the most common ORM behavior.
-  if (rows_affected == -1) {
-    // This could be a SELECT statement, or a DDL statement on some drivers.
-    // Or it could be an actual error state not caught by query.exec() returning
-    // false (rare). If it's a non-DML statement that succeeded, -1 might be
-    // "normal". We can't easily distinguish without knowing the type of SQL
-    // statement. For now, we return it as is. The user of ExecRaw needs to be
-    // aware of this. qInfo() << "Session::ExecRaw: numRowsAffected is -1. SQL:
-    // " << sql << ". This may be normal for SELECT or DDL statements.";
-  }
+        if (exec_err) {
+            qWarning() << "Session::ExecRaw: Execution failed for SQL:" << sql_qstr << "Args:" << args_qvariantlist << "Error:" << QString::fromStdString(exec_err.toString());
+            return std::unexpected(exec_err);
+        }
 
-  return rows_affected;
-}
+        long long rows_affected = sql_query_obj.numRowsAffected();
 
-} // namespace cpporm
+        // numRowsAffected() 对于非 DML 语句（如 SELECT）可能返回 -1，这是正常的。
+        // 对于 DDL，行为可能因驱动而异。
+        // if (rows_affected == -1) {
+        //     qInfo() << "Session::ExecRaw: numRowsAffected is -1. SQL: " << sql_qstr
+        //             << ". This may be normal for SELECT or DDL statements.";
+        // }
+        return rows_affected;
+    }
+
+}  // namespace cpporm

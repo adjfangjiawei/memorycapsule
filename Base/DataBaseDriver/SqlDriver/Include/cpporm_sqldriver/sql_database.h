@@ -29,7 +29,7 @@ namespace cpporm_sqldriver {
         bool isValid() const;
         bool ping(int timeout_seconds = 2);
 
-        bool transaction();
+        bool transaction();  // Renamed from beginTransaction as per error log implication
         bool commit();
         bool rollback();
         bool isTransactionActive() const;
@@ -82,6 +82,10 @@ namespace cpporm_sqldriver {
 
         SqlValue nextSequenceValue(const std::string& sequenceName, const std::string& schema = "");
 
+        // Move operations made public
+        SqlDatabase(SqlDatabase&&) noexcept;
+        SqlDatabase& operator=(SqlDatabase&&) noexcept;
+
       private:
         friend class SqlDriverManager;
         friend class SqlQuery;
@@ -93,8 +97,7 @@ namespace cpporm_sqldriver {
 
         SqlDatabase(const SqlDatabase&) = delete;
         SqlDatabase& operator=(const SqlDatabase&) = delete;
-        SqlDatabase(SqlDatabase&&) noexcept;
-        SqlDatabase& operator=(SqlDatabase&&) noexcept;
+        // Moved constructors/assignment are now public
     };
 
 }  // namespace cpporm_sqldriver

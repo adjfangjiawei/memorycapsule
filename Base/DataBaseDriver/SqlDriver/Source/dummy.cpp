@@ -4,7 +4,7 @@
 #include "cpporm_sqldriver/sql_connection_parameters.h"
 #include "cpporm_sqldriver/sql_database.h"
 #include "cpporm_sqldriver/sql_driver_manager.h"
-// #include "cpporm_sqldriver/sql_driver_types.h" // <-- 移除这一行
+// #include "cpporm_sqldriver/sql_driver_types.h" // Removed
 #include "cpporm_sqldriver/sql_enums.h"
 #include "cpporm_sqldriver/sql_error.h"
 #include "cpporm_sqldriver/sql_field.h"
