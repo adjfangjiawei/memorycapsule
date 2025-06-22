@@ -7,9 +7,9 @@ namespace cpporm_mysql_transport {
 
     void MySqlTransportResult::populateFieldsMeta() {
         if (m_meta_populated || !m_mysql_res_metadata || m_field_count == 0) {
-            if (!m_mysql_res_metadata && m_field_count > 0 && m_is_valid) {
-                m_error_collector = MySqlTransportError(MySqlTransportError::Category::InternalError, "MYSQL_RES metadata handle is null in populateFieldsMeta when fields expected.");
-                m_is_valid = false;
+            if (!m_mysql_res_metadata && m_field_count > 0 && m_is_valid) {  // m_is_valid might be true from constructor
+                m_error_collector_owned = MySqlTransportError(MySqlTransportError::Category::InternalError, "MYSQL_RES metadata handle is null in populateFieldsMeta when fields expected.");
+                m_is_valid = false;  // Explicitly mark as invalid
             }
             return;
         }
@@ -18,8 +18,8 @@ namespace cpporm_mysql_transport {
         m_fields_meta.resize(m_field_count);
         MYSQL_FIELD* fields_raw = mysql_fetch_fields(m_mysql_res_metadata);
         if (!fields_raw) {
-            m_error_collector = MySqlTransportError(MySqlTransportError::Category::InternalError, "mysql_fetch_fields returned null.");
-            m_field_count = 0;
+            m_error_collector_owned = MySqlTransportError(MySqlTransportError::Category::InternalError, "mysql_fetch_fields returned null.");
+            m_field_count = 0;  // Reset field count as meta is unavailable
             m_is_valid = false;
             return;
         }
@@ -37,10 +37,13 @@ namespace cpporm_mysql_transport {
             m_fields_meta[i].max_length = fields_raw[i].max_length;
             m_fields_meta[i].flags = fields_raw[i].flags;
             m_fields_meta[i].decimals = fields_raw[i].decimals;
+            // default_value parsing would require knowing the type and converting from string,
+            // or if `fields_raw[i].def` was directly usable (it is const char*).
+            // For now, default_value is left as default (null) MySqlNativeValue.
         }
         m_meta_populated = true;
-        // Do not set m_is_valid = true here unconditionally.
-        // It should be set by the constructor after all initialization steps, including this one, are successful.
+        // Do not set m_is_valid = true here, constructor manages overall validity.
+        // If we reached here without errors, it contributes to validity.
     }
 
     const std::vector<MySqlTransportFieldMeta>& MySqlTransportResult::getFieldsMeta() const {
@@ -63,9 +66,9 @@ namespace cpporm_mysql_transport {
     }
 
     int MySqlTransportResult::getFieldIndex(const std::string& col_name) const {
-        if (!m_is_valid || !m_meta_populated) return -1;  // Ensure meta is populated
+        if (!m_is_valid || !m_meta_populated) return -1;
         for (size_t i = 0; i < m_fields_meta.size(); ++i) {
-            if (m_fields_meta[i].name == col_name || (!m_fields_meta[i].original_name.empty() && m_fields_meta[i].original_name == col_name)) {  // Check original_name too
+            if (m_fields_meta[i].name == col_name || (!m_fields_meta[i].original_name.empty() && m_fields_meta[i].original_name == col_name)) {
                 return static_cast<int>(i);
             }
         }

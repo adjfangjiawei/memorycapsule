@@ -1,4 +1,3 @@
-// cpporm_mysql_transport/mysql_transport_result.h
 #pragma once
 
 #include <mysql/mysql.h>
@@ -16,10 +15,10 @@ namespace cpporm_mysql_transport {
 
     class MySqlTransportResult {
       public:
-        // Constructor for PREPARED STATEMENTS (MYSQL_STMT*)
-        MySqlTransportResult(MySqlTransportStatement* stmt, MYSQL_RES* meta_res_handle, MySqlTransportError& err_ref);
-        // Constructor for NON-PREPARED STATEMENTS (MYSQL_RES* from mysql_store_result)
-        MySqlTransportResult(MYSQL_RES* stored_res_handle, MySqlTransportError& err_ref);
+        // 构造函数（针对预处理语句 MYSQL_STMT*）
+        MySqlTransportResult(MySqlTransportStatement* stmt, MYSQL_RES* meta_res_handle, const MySqlTransportError& initial_error);  // 修改：接收 const MySqlTransportError&
+        // 构造函数（针对非预处理语句 MYSQL_RES* from mysql_store_result）
+        MySqlTransportResult(MYSQL_RES* stored_res_handle, const MySqlTransportError& initial_error);  // 修改：接收 const MySqlTransportError&
         ~MySqlTransportResult();
 
         MySqlTransportResult(const MySqlTransportResult&) = delete;
@@ -28,7 +27,7 @@ namespace cpporm_mysql_transport {
         MySqlTransportResult& operator=(MySqlTransportResult&& other) noexcept;
 
         bool isValid() const;
-        MySqlTransportError getError() const;
+        MySqlTransportError getError() const;  // 返回副本
         my_ulonglong getRowCount() const;
         unsigned int getFieldCount() const;
         const std::vector<MySqlTransportFieldMeta>& getFieldsMeta() const;
@@ -45,39 +44,38 @@ namespace cpporm_mysql_transport {
 
         MYSQL_RES* getNativeMetadataHandle() const {
             return m_mysql_res_metadata;
-        }  // For metadata
+        }
         MYSQL_STMT* getNativeStatementHandleForFetch() const {
             return m_mysql_stmt_handle_for_fetch;
-        }  // For prepared stmt fetch
+        }
 
       private:
         void populateFieldsMeta();
         void clearCurrentRow();
-        void setupOutputBindBuffers();  // Added declaration
+        void setupOutputBindBuffers();
 
-        MySqlTransportStatement* m_statement;       // Null if from non-prepared MYSQL_RES
-        MYSQL_RES* m_mysql_res_metadata;            // Metadata for prepared, or full result for non-prepared
-        MYSQL_STMT* m_mysql_stmt_handle_for_fetch;  // Only for prepared statements for fetching
-        MySqlTransportError& m_error_collector;     // Reference to error object (e.g., from statement or connection)
+        MySqlTransportStatement* m_statement;         // Null if from non-prepared MYSQL_RES
+        MYSQL_RES* m_mysql_res_metadata;              // Metadata for prepared, or full result for non-prepared
+        MYSQL_STMT* m_mysql_stmt_handle_for_fetch;    // Only for prepared statements for fetching
+        MySqlTransportError m_error_collector_owned;  // 修改：错误对象为值类型
 
         std::vector<MySqlTransportFieldMeta> m_fields_meta;
-        MYSQL_ROW m_current_sql_row;       // For non-prepared
-        unsigned long* m_current_lengths;  // For non-prepared
+        MYSQL_ROW m_current_sql_row;
+        unsigned long* m_current_lengths;
         my_ulonglong m_row_count = 0;
         unsigned int m_field_count = 0;
-        long long m_current_row_idx = -1;  // 0-based index of current fetched row, -1 if no row
+        long long m_current_row_idx = -1;
         bool m_meta_populated = false;
         bool m_is_valid = false;
         bool m_is_from_prepared_statement = false;
-        bool m_stmt_result_was_stored = false;  // For prepared: true if mysql_stmt_store_result succeeded
+        bool m_stmt_result_was_stored = false;
+        bool m_fetched_all_from_stmt = false;
 
-        // For prepared statement result binding
         std::vector<MYSQL_BIND> m_output_bind_buffers;
         std::vector<std::vector<unsigned char>> m_output_data_buffers;
-        std::vector<char> m_output_is_null_indicators;  // char (0 or 1)
+        std::vector<char> m_output_is_null_indicators;
         std::vector<unsigned long> m_output_length_indicators;
-        std::vector<char> m_output_error_indicators;  // char (0 or 1) for truncation/error
-        bool m_fetched_all_from_stmt = false;         // For prepared: true if MYSQL_NO_DATA was returned
+        std::vector<char> m_output_error_indicators;
     };
 
 }  // namespace cpporm_mysql_transport

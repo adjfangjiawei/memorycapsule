@@ -5,14 +5,16 @@
 #include <variant>  // For std::visit
 #include <vector>
 
-#include "cpporm_mysql_transport/mysql_transport_connection.h"  // For getError related context
+#include "cpporm_mysql_transport/mysql_transport_connection.h"
 #include "cpporm_mysql_transport/mysql_transport_statement.h"
-#include "mysql_protocol/mysql_type_converter.h"  // For MySqlNativeValue and helper functions
+#include "mysql_protocol/mysql_type_converter.h"
 
 namespace cpporm_mysql_transport {
 
     bool MySqlTransportStatement::bindParam(unsigned int pos_zero_based, const MySqlTransportBindParam& param) {
         if (!m_stmt_handle) {
+            // 如果 m_stmt_handle 为空，则错误应该与连接相关，或者是一个API使用错误
+            // 之前setError会尝试从m_stmt_handle或m_connection获取错误，但这里m_stmt_handle明确为空
             setError(MySqlTransportError::Category::ApiUsageError, "Statement handle not initialized for bindParam.");
             return false;
         }
@@ -29,7 +31,6 @@ namespace cpporm_mysql_transport {
         if (m_bind_buffers.size() != total_params) {
             m_bind_buffers.assign(total_params, MYSQL_BIND{});
             m_param_data_buffers.assign(total_params, std::vector<unsigned char>());
-            // ***** 修正: m_param_is_null_indicators 是 std::vector<unsigned char> *****
             m_param_is_null_indicators.assign(total_params, static_cast<unsigned char>(0));
             m_param_length_indicators.assign(total_params, 0UL);
         }
@@ -39,11 +40,7 @@ namespace cpporm_mysql_transport {
 
         const mysql_protocol::MySqlNativeValue& native_val = param.value;
 
-        // ***** 修正: 将 bool 存为 unsigned char (0 或 1) *****
         m_param_is_null_indicators[pos_zero_based] = native_val.is_null() ? 1 : 0;
-        // ***** 修正: MYSQL_BIND::is_null 指向 unsigned char *****
-        // C API 的 is_null (即使声明为 bool*) 通常能接受指向 char/unsigned char 的指针
-        // 因为 bool 在内存中通常就是 0 或 1 的字节表示。
         current_mysql_bind.is_null = reinterpret_cast<bool*>(&m_param_is_null_indicators[pos_zero_based]);
         current_mysql_bind.buffer_type = native_val.original_mysql_type;
         current_mysql_bind.is_unsigned = (native_val.original_mysql_flags & UNSIGNED_FLAG) ? 1U : 0U;
@@ -122,10 +119,10 @@ namespace cpporm_mysql_transport {
                     std::memcpy(m_param_data_buffers[pos_zero_based].data(), &arg, sizeof(MYSQL_TIME));
                     current_mysql_bind.buffer = static_cast<void*>(m_param_data_buffers[pos_zero_based].data());
                     current_mysql_bind.buffer_length = sizeof(MYSQL_TIME);
-                    m_param_length_indicators[pos_zero_based] = 0;
+                    m_param_length_indicators[pos_zero_based] = 0;  // Length is not used for MYSQL_TIME input if buffer_length is set
                 } else {
                     setError(MySqlTransportError::Category::ApiUsageError, "Unsupported type in MySqlNativeValue for binding parameter at pos " + std::to_string(pos_zero_based));
-                    m_param_is_null_indicators[pos_zero_based] = 1;  // Mark as SQL NULL for safety
+                    m_param_is_null_indicators[pos_zero_based] = 1;
                     current_mysql_bind.buffer_type = MYSQL_TYPE_NULL;
                     current_mysql_bind.buffer = nullptr;
                     m_param_length_indicators[pos_zero_based] = 0;
@@ -139,6 +136,9 @@ namespace cpporm_mysql_transport {
 
     bool MySqlTransportStatement::bindParams(const std::vector<MySqlTransportBindParam>& params) {
         if (!m_stmt_handle) {
+            // setErrorFromMySQL(); // 无参数版本，会尝试从 m_stmt_handle 或 m_connection 获取
+            // 此时 m_stmt_handle 为 nullptr，setErrorFromMySQL 会尝试 m_connection
+            // 或者更直接地设置错误：
             setError(MySqlTransportError::Category::ApiUsageError, "Statement handle not initialized for bindParams.");
             return false;
         }
@@ -154,7 +154,7 @@ namespace cpporm_mysql_transport {
         }
 
         if (expected_param_count == 0) {
-            return true;  // No params to bind
+            return true;
         }
 
         m_bind_buffers.assign(expected_param_count, MYSQL_BIND{});
@@ -163,13 +163,14 @@ namespace cpporm_mysql_transport {
         m_param_length_indicators.assign(expected_param_count, 0UL);
 
         for (unsigned int i = 0; i < params.size(); ++i) {
-            if (!bindParam(i, params[i])) {
+            if (!bindParam(i, params[i])) {  // bindParam 内部会设置错误
                 return false;
             }
         }
 
         if (mysql_stmt_bind_param(m_stmt_handle, m_bind_buffers.data()) != 0) {
-            setErrorFromMySQL();
+            // 在 mysql_stmt_bind_param 失败时，错误信息应该从语句句柄 m_stmt_handle 获取
+            setErrorFromMySQL(reinterpret_cast<MYSQL*>(m_stmt_handle), "mysql_stmt_bind_param failed");
             return false;
         }
         return true;

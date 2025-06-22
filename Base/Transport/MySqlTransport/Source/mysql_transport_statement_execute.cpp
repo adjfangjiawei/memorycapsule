@@ -1,19 +1,22 @@
-// cpporm_mysql_transport/mysql_transport_statement_execute.cpp
 #include <mysql/mysql.h>
 
-#include "cpporm_mysql_transport/mysql_transport_connection.h"  // For connection handle
+#include "cpporm_mysql_transport/mysql_transport_connection.h"
 #include "cpporm_mysql_transport/mysql_transport_statement.h"
-// No CR_NO_MORE_RESULTS needed here based on current logic.
 
 namespace cpporm_mysql_transport {
 
     std::optional<my_ulonglong> MySqlTransportStatement::execute() {
+        if (m_is_utility_command) {
+            setError(MySqlTransportError::Category::ApiUsageError, "Utility commands (like SHOW) should be run via executeQuery, not execute.");
+            return std::nullopt;
+        }
+
         if (!m_stmt_handle) {
             setError(MySqlTransportError::Category::ApiUsageError, "Statement handle not initialized for execute.");
             return std::nullopt;
         }
         if (!m_is_prepared) {
-            if (!prepare()) {
+            if (!prepare()) {  // prepare() already checks for utility command
                 return std::nullopt;
             }
         }
@@ -23,7 +26,7 @@ namespace cpporm_mysql_transport {
         m_warning_count = 0;
 
         if (mysql_stmt_execute(m_stmt_handle) != 0) {
-            setErrorFromMySQL();
+            setErrorFromMySQL(reinterpret_cast<MYSQL*>(m_stmt_handle), "mysql_stmt_execute failed");
             return std::nullopt;
         }
 
@@ -33,39 +36,35 @@ namespace cpporm_mysql_transport {
             m_warning_count = mysql_warning_count(m_connection->getNativeHandle());
         }
 
+        // DML 通常不会返回结果集，但如果存储过程执行DML并返回状态，可能需要处理
+        // mysql_stmt_next_result 循环是为了清除可能由某些语句（如多语句查询或某些存储过程）返回的任何额外结果集或状态。
+        // 对于简单的DML，这通常是不必要的，但为了通用性而保留。
         int status;
         do {
+            // 检查语句句柄上是否有结果集元数据，通常DML没有
             MYSQL_RES* meta = mysql_stmt_result_metadata(m_stmt_handle);
             if (meta) {
-                mysql_free_result(meta);
-            }
-            // It's crucial to free any *stored* result *before* calling mysql_stmt_next_result
-            // if mysql_stmt_store_result was used.
-            // MySqlTransportResult handles this for results it manages.
-            // If this `execute()` call itself could have produced a result that
-            // `mysql_stmt_store_result` might have been called on internally by some driver logic
-            // (not typical for a simple execute of DML), then that would need freeing.
-            // For now, assume direct `mysql_stmt_next_result` is for advancing past un-stored results.
-            if (mysql_stmt_free_result(m_stmt_handle)) {
-                // This attempts to free a result stored by mysql_stmt_store_result.
-                // If no such result, it does nothing or returns error.
-                // Only check error if it's unexpected.
-                if (mysql_stmt_errno(m_stmt_handle) != 0 && mysql_stmt_errno(m_stmt_handle) != CR_NO_RESULT_SET) {
-                    // CR_NO_RESULT_SET (if defined) means it's fine if no result was stored.
-                    // setErrorFromMySQL(); // Potentially log or handle this.
+                mysql_free_result(meta);  // 如果有，则释放
+            } else {
+                // 如果 mysql_stmt_result_metadata 返回 NULL，检查是否有错误
+                if (mysql_stmt_errno(m_stmt_handle) != 0) {
+                    // setErrorFromMySQL(reinterpret_cast<MYSQL*>(m_stmt_handle), "Error after DML checking for metadata");
+                    // 错误可能已经被 mysql_stmt_execute 设置，这里可能是重复的
+                    // return std::nullopt; // 可能过于严格
                 }
             }
-
+            // 尝试前进到下一个结果集（如果有）
             status = mysql_stmt_next_result(m_stmt_handle);
-            if (status > 0) {
-                setErrorFromMySQL();
+            if (status > 0) {  // error
+                setErrorFromMySQL(reinterpret_cast<MYSQL*>(m_stmt_handle), "Error in mysql_stmt_next_result after DML");
                 return std::nullopt;
             }
-        } while (status == 0);
+        } while (status == 0);  // status == 0 表示有更多结果集
 
+        // status == -1 表示没有更多结果集了，这是正常的结束
         if (status == -1) {
-            if (mysql_stmt_errno(m_stmt_handle) != 0) {
-                setErrorFromMySQL();
+            if (mysql_stmt_errno(m_stmt_handle) != 0) {  // 再次检查错误
+                setErrorFromMySQL(reinterpret_cast<MYSQL*>(m_stmt_handle), "Error after processing all results in DML execute");
                 return std::nullopt;
             }
         }

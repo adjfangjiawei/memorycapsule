@@ -1,4 +1,3 @@
-// MySqlTransport/Include/cpporm_mysql_transport/mysql_transport_statement.h
 #pragma once
 
 #include <mysql/mysql.h>
@@ -31,8 +30,8 @@ namespace cpporm_mysql_transport {
         bool bindParam(unsigned int pos_zero_based, const MySqlTransportBindParam& param);
         bool bindParams(const std::vector<MySqlTransportBindParam>& params);
 
-        std::optional<my_ulonglong> execute();
-        std::unique_ptr<MySqlTransportResult> executeQuery();
+        std::optional<my_ulonglong> execute();                 // For DML
+        std::unique_ptr<MySqlTransportResult> executeQuery();  // For SELECT and utility commands like SHOW
 
         my_ulonglong getAffectedRows() const;
         my_ulonglong getLastInsertId() const;
@@ -48,21 +47,24 @@ namespace cpporm_mysql_transport {
         MySqlTransportConnection* getConnection() const {
             return m_connection;
         }
+        bool isUtilityCommand() const {
+            return m_is_utility_command;
+        }
 
       private:
         void clearError();
         void setError(MySqlTransportError::Category cat, const std::string& msg, unsigned int proto_errc = 0);
-        void setErrorFromMySQL();
+        void setErrorFromMySQL(MYSQL* handle_to_check_error_on, const std::string& context);
         void setErrorFromProtocol(const mysql_protocol::MySqlProtocolError& proto_err, const std::string& context);
 
         MySqlTransportConnection* m_connection;
         std::string m_original_query;
-        MYSQL_STMT* m_stmt_handle;
+        MYSQL_STMT* m_stmt_handle;  // Will be nullptr for utility commands
         bool m_is_prepared;
+        bool m_is_utility_command;
 
         std::vector<MYSQL_BIND> m_bind_buffers;
         std::vector<std::vector<unsigned char>> m_param_data_buffers;
-        // ***** 关键修改: 使用 unsigned char 存储 NULL 指示符 (0 或 1) *****
         std::vector<unsigned char> m_param_is_null_indicators;
         std::vector<unsigned long> m_param_length_indicators;
 

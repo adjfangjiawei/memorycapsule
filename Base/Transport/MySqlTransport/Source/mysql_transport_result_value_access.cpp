@@ -8,25 +8,25 @@ namespace cpporm_mysql_transport {
 
     std::optional<mysql_protocol::MySqlNativeValue> MySqlTransportResult::getValue(unsigned int col_idx) {
         if (!m_is_valid || col_idx >= m_field_count) {
-            m_error_collector = MySqlTransportError(MySqlTransportError::Category::ApiUsageError, "Invalid column index for getValue.");
+            m_error_collector_owned = MySqlTransportError(MySqlTransportError::Category::ApiUsageError, "Invalid column index for getValue.");
             return std::nullopt;
         }
         if (m_fields_meta.size() <= col_idx) {
-            m_error_collector = MySqlTransportError(MySqlTransportError::Category::InternalError, "Field metadata inconsistent with field count in getValue.");
+            m_error_collector_owned = MySqlTransportError(MySqlTransportError::Category::InternalError, "Field metadata inconsistent with field count in getValue.");
             return std::nullopt;
         }
         if (m_current_row_idx == -1) {  // No valid row fetched (either before first fetch, after last, or after an error)
-            m_error_collector = MySqlTransportError(MySqlTransportError::Category::ApiUsageError, "No current valid row to get value from.");
+            m_error_collector_owned = MySqlTransportError(MySqlTransportError::Category::ApiUsageError, "No current valid row to get value from.");
             return std::nullopt;
         }
 
         if (m_is_from_prepared_statement) {
             if (!m_mysql_stmt_handle_for_fetch) {  // m_fetched_all_from_stmt implies no current row too
-                m_error_collector = MySqlTransportError(MySqlTransportError::Category::ApiUsageError, "Invalid state for prepared statement getValue (no handle or past end).");
+                m_error_collector_owned = MySqlTransportError(MySqlTransportError::Category::ApiUsageError, "Invalid state for prepared statement getValue (no handle or past end).");
                 return std::nullopt;
             }
             if (m_output_is_null_indicators.size() <= col_idx || m_output_bind_buffers.size() <= col_idx) {
-                m_error_collector = MySqlTransportError(MySqlTransportError::Category::InternalError, "Output bind/indicator buffers out of sync for prepared statement getValue.");
+                m_error_collector_owned = MySqlTransportError(MySqlTransportError::Category::InternalError, "Output bind/indicator buffers out of sync for prepared statement getValue.");
                 return std::nullopt;
             }
 
@@ -42,13 +42,13 @@ namespace cpporm_mysql_transport {
             if (expected_nv) {
                 return expected_nv.value();
             } else {
-                m_error_collector = MySqlTransportError(MySqlTransportError::Category::ProtocolError, "Failed to convert bound result to NativeValue: " + expected_nv.error().error_message, 0, nullptr, nullptr, expected_nv.error().error_code);
+                m_error_collector_owned = MySqlTransportError(MySqlTransportError::Category::ProtocolError, "Failed to convert bound result to NativeValue: " + expected_nv.error().error_message, 0, nullptr, nullptr, expected_nv.error().error_code);
                 return std::nullopt;
             }
 
         } else {  // From non-prepared (MYSQL_RES)
             if (!m_current_sql_row) {
-                m_error_collector = MySqlTransportError(MySqlTransportError::Category::ApiUsageError, "No current row fetched for non-prepared statement getValue.");
+                m_error_collector_owned = MySqlTransportError(MySqlTransportError::Category::ApiUsageError, "No current row fetched for non-prepared statement getValue.");
                 return std::nullopt;
             }
             if (m_current_sql_row[col_idx] == nullptr) {
@@ -61,11 +61,11 @@ namespace cpporm_mysql_transport {
 
             MYSQL_FIELD* field_info = mysql_fetch_field_direct(m_mysql_res_metadata, col_idx);
             if (!field_info) {
-                m_error_collector = MySqlTransportError(MySqlTransportError::Category::InternalError, "Failed to fetch field info for getValue.");
+                m_error_collector_owned = MySqlTransportError(MySqlTransportError::Category::InternalError, "Failed to fetch field info for getValue.");
                 return std::nullopt;
             }
             if (!m_current_lengths) {
-                m_error_collector = MySqlTransportError(MySqlTransportError::Category::InternalError, "Row lengths not available for non-prepared getValue.");
+                m_error_collector_owned = MySqlTransportError(MySqlTransportError::Category::InternalError, "Row lengths not available for non-prepared getValue.");
                 return std::nullopt;
             }
 
@@ -73,7 +73,7 @@ namespace cpporm_mysql_transport {
             if (expected_nv) {
                 return expected_nv.value();
             } else {
-                m_error_collector = MySqlTransportError(MySqlTransportError::Category::ProtocolError, "Failed to convert row field to NativeValue: " + expected_nv.error().error_message, 0, nullptr, nullptr, expected_nv.error().error_code);
+                m_error_collector_owned = MySqlTransportError(MySqlTransportError::Category::ProtocolError, "Failed to convert row field to NativeValue: " + expected_nv.error().error_message, 0, nullptr, nullptr, expected_nv.error().error_code);
                 return std::nullopt;
             }
         }
@@ -82,7 +82,7 @@ namespace cpporm_mysql_transport {
     std::optional<mysql_protocol::MySqlNativeValue> MySqlTransportResult::getValue(const std::string& col_name) {
         int idx = getFieldIndex(col_name);
         if (idx == -1) {
-            m_error_collector = MySqlTransportError(MySqlTransportError::Category::ApiUsageError, "Invalid column name for getValue: " + col_name);
+            m_error_collector_owned = MySqlTransportError(MySqlTransportError::Category::ApiUsageError, "Invalid column name for getValue: " + col_name);
             return std::nullopt;
         }
         return getValue(static_cast<unsigned int>(idx));
@@ -90,7 +90,6 @@ namespace cpporm_mysql_transport {
 
     bool MySqlTransportResult::isNull(unsigned int col_idx) {
         if (!m_is_valid || col_idx >= m_field_count || m_current_row_idx == -1) {
-            // If not valid, or index out of bounds, or no current row, consider it "null" for practical purposes or undefined.
             return true;
         }
 
@@ -117,13 +116,11 @@ namespace cpporm_mysql_transport {
         }
         row_values.reserve(m_field_count);
         for (unsigned int i = 0; i < m_field_count; ++i) {
-            auto val_opt = getValue(i);  // getValue now handles m_current_row_idx == -1
+            auto val_opt = getValue(i);
             if (val_opt) {
-                row_values.push_back(std::move(*val_opt));  // Use *val_opt as getValue returns optional
+                row_values.push_back(std::move(*val_opt));
             } else {
-                // Error occurred fetching this value, or it was truly null and getValue returned an empty MySqlNativeValue in optional
-                // If val_opt is nullopt due to an error in getValue, m_error_collector is already set.
-                // We should push a default (NULL) MySqlNativeValue.
+                // Error already set by getValue, push a default NULL value
                 mysql_protocol::MySqlNativeValue null_val;
                 if (m_fields_meta.size() > i) {
                     null_val.original_mysql_type = m_fields_meta[i].native_type_id;

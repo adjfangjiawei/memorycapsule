@@ -11,7 +11,7 @@ namespace cpporm_mysql_transport {
     void MySqlTransportResult::setupOutputBindBuffers() {
         if (!m_is_from_prepared_statement || m_field_count == 0 || !m_mysql_stmt_handle_for_fetch) return;
         if (m_fields_meta.size() != m_field_count) {
-            m_error_collector = MySqlTransportError(MySqlTransportError::Category::InternalError, "Field metadata count mismatch in setupOutputBindBuffers.");
+            m_error_collector_owned = MySqlTransportError(MySqlTransportError::Category::InternalError, "Field metadata count mismatch in setupOutputBindBuffers.");
             m_is_valid = false;
             return;
         }
@@ -27,7 +27,6 @@ namespace cpporm_mysql_transport {
             MYSQL_BIND& bind = m_output_bind_buffers[i];
             const MySqlTransportFieldMeta& meta = m_fields_meta[i];
 
-            // Zero out the bind structure first for safety, though assign above should do it.
             std::memset(&bind, 0, sizeof(MYSQL_BIND));
 
             bind.buffer_type = meta.native_type_id;
@@ -68,9 +67,9 @@ namespace cpporm_mysql_transport {
                 case MYSQL_TYPE_DECIMAL:
                 case MYSQL_TYPE_NEWDECIMAL:
                     if (buffer_sz == 0)
-                        buffer_sz = 66;  // Max MySQL decimal string length + sign + terminator
+                        buffer_sz = 66;
                     else if (buffer_sz < 66)
-                        buffer_sz = 66;  // Ensure enough for typical string form
+                        buffer_sz = 66;
                     break;
                 case MYSQL_TYPE_STRING:
                 case MYSQL_TYPE_VAR_STRING:
@@ -84,16 +83,16 @@ namespace cpporm_mysql_transport {
                 case MYSQL_TYPE_SET:
                 case MYSQL_TYPE_GEOMETRY:
                     if (buffer_sz == 0)
-                        buffer_sz = (meta.max_length > 0) ? meta.max_length : 256;  // Use max_length if available
+                        buffer_sz = (meta.max_length > 0) ? meta.max_length : 256;
                     else if (meta.max_length > 0 && buffer_sz < meta.max_length)
                         buffer_sz = meta.max_length;
-                    if (buffer_sz == 0) buffer_sz = 256;  // Fallback if still 0
+                    if (buffer_sz == 0) buffer_sz = 256;
                     break;
                 default:
                     if (buffer_sz == 0) buffer_sz = 256;
                     break;
             }
-            if (buffer_sz == 0) buffer_sz = 1;  // Absolute minimum
+            if (buffer_sz == 0) buffer_sz = 1;
 
             m_output_data_buffers[i].assign(buffer_sz, (unsigned char)0);
             bind.buffer = m_output_data_buffers[i].data();
@@ -106,11 +105,11 @@ namespace cpporm_mysql_transport {
 
         if (mysql_stmt_bind_result(m_mysql_stmt_handle_for_fetch, m_output_bind_buffers.data()) != 0) {
             if (m_statement)
-                m_error_collector = m_statement->getError();
+                m_error_collector_owned = m_statement->getError();
             else if (m_mysql_stmt_handle_for_fetch)
-                m_error_collector = MySqlTransportError(MySqlTransportError::Category::QueryError, "mysql_stmt_bind_result failed.", mysql_stmt_errno(m_mysql_stmt_handle_for_fetch), mysql_stmt_sqlstate(m_mysql_stmt_handle_for_fetch), mysql_stmt_error(m_mysql_stmt_handle_for_fetch));
+                m_error_collector_owned = MySqlTransportError(MySqlTransportError::Category::QueryError, "mysql_stmt_bind_result failed.", mysql_stmt_errno(m_mysql_stmt_handle_for_fetch), mysql_stmt_sqlstate(m_mysql_stmt_handle_for_fetch), mysql_stmt_error(m_mysql_stmt_handle_for_fetch));
             else
-                m_error_collector = MySqlTransportError(MySqlTransportError::Category::QueryError, "mysql_stmt_bind_result failed (no statement context).");
+                m_error_collector_owned = MySqlTransportError(MySqlTransportError::Category::QueryError, "mysql_stmt_bind_result failed (no statement context).");
             m_is_valid = false;
         }
     }
