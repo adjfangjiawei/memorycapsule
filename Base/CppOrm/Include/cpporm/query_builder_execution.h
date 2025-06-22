@@ -3,7 +3,7 @@
 #define cpporm_QUERY_BUILDER_EXECUTION_H
 
 #include "cpporm/query_builder_core.h"
-#include "cpporm_sqldriver/sql_value.h"  // For SqlValue type
+#include "sqldriver/sql_value.h"  // For SqlValue type
 
 // Other necessary includes are transitively included via query_builder_core.h
 

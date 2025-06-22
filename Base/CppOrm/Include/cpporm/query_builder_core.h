@@ -26,7 +26,7 @@
 #include "cpporm/i_query_executor.h"
 #include "cpporm/model_base.h"
 #include "cpporm/query_builder_fwd.h"
-#include "cpporm_sqldriver/sql_value.h"  // For CreateImpl return type
+#include "sqldriver/sql_value.h"  // For CreateImpl return type
 
 namespace cpporm {
 

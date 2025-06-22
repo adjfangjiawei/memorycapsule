@@ -10,10 +10,10 @@
 #include <QTime>
 #include <QVariant>  // Still used for std::any <-> QueryValue <-> SqlValue intermediate if needed
 
-#include "cpporm_sqldriver/sql_field.h"   // SqlField (from SqlRecord)
-#include "cpporm_sqldriver/sql_query.h"   // SqlQuery
-#include "cpporm_sqldriver/sql_record.h"  // SqlRecord (from SqlQuery)
-#include "cpporm_sqldriver/sql_value.h"   // SqlValue
+#include "sqldriver/sql_field.h"   // SqlField (from SqlRecord)
+#include "sqldriver/sql_query.h"   // SqlQuery
+#include "sqldriver/sql_record.h"  // SqlRecord (from SqlQuery)
+#include "sqldriver/sql_value.h"   // SqlValue
 
 namespace cpporm {
 

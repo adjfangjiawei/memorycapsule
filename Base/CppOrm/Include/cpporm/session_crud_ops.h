@@ -2,8 +2,8 @@
 #ifndef cpporm_SESSION_CRUD_OPS_H
 #define cpporm_SESSION_CRUD_OPS_H
 
-#include "cpporm/session_core.h"         // 包含 Session 核心定义和 QueryBuilder
-#include "cpporm_sqldriver/sql_value.h"  // SqlValue
+#include "cpporm/session_core.h"  // 包含 Session 核心定义和 QueryBuilder
+#include "sqldriver/sql_value.h"  // SqlValue
 
 namespace cpporm {
 

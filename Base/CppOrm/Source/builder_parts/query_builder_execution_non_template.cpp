@@ -1,8 +1,8 @@
 // cpporm/builder_parts/query_builder_execution_non_template.cpp
-#include "cpporm/i_query_executor.h"     // For IQueryExecutor
-#include "cpporm/query_builder_core.h"   // For QueryBuilder definition
-#include "cpporm/session.h"              // For Session::anyToQueryValueForSessionConvenience (still valid)
-#include "cpporm_sqldriver/sql_value.h"  // For SqlValue in Create return type
+#include "cpporm/i_query_executor.h"    // For IQueryExecutor
+#include "cpporm/query_builder_core.h"  // For QueryBuilder definition
+#include "cpporm/session.h"             // For Session::anyToQueryValueForSessionConvenience (still valid)
+#include "sqldriver/sql_value.h"        // For SqlValue in Create return type
 
 // QDebug, QMetaType, sstream, variant are included via query_builder_core.h or session.h
 

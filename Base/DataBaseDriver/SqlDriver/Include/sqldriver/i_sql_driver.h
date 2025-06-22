@@ -1,4 +1,4 @@
-// cpporm_sqldriver/i_sql_driver.h
+// sqldriver/i_sql_driver.h
 #pragma once
 
 #include <any>

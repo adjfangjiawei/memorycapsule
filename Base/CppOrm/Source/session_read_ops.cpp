@@ -4,10 +4,10 @@
 
 #include "cpporm/model_base.h"
 #include "cpporm/query_builder.h"
-#include "cpporm/session.h"               // 主头文件
-#include "cpporm_sqldriver/sql_query.h"   // SqlQuery
-#include "cpporm_sqldriver/sql_record.h"  // SqlRecord
-#include "cpporm_sqldriver/sql_value.h"   // SqlValue
+#include "cpporm/session.h"        // 主头文件
+#include "sqldriver/sql_query.h"   // SqlQuery
+#include "sqldriver/sql_record.h"  // SqlRecord
+#include "sqldriver/sql_value.h"   // SqlValue
 
 namespace cpporm {
 

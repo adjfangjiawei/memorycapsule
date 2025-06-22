@@ -6,7 +6,7 @@
 #include "cpporm/model_base.h"
 #include "cpporm/query_builder.h"
 #include "cpporm/session.h"
-#include "cpporm_sqldriver/sql_value.h"  // SqlValue
+#include "sqldriver/sql_value.h"  // SqlValue
 
 namespace cpporm {
 

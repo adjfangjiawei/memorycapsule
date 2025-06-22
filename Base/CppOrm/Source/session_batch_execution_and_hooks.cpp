@@ -4,10 +4,10 @@
 
 #include "cpporm/session.h"
 #include "cpporm/session_priv_batch_helpers.h"
-#include "cpporm_sqldriver/sql_database.h"
-#include "cpporm_sqldriver/sql_error.h"
-#include "cpporm_sqldriver/sql_query.h"
-#include "cpporm_sqldriver/sql_value.h"
+#include "sqldriver/sql_database.h"
+#include "sqldriver/sql_error.h"
+#include "sqldriver/sql_query.h"
+#include "sqldriver/sql_value.h"
 
 namespace cpporm {
     namespace internal_batch_helpers {

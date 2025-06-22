@@ -1,4 +1,4 @@
-// cpporm_sqldriver/sql_result.h
+// sqldriver/sql_result.h
 #pragma once
 
 #include <iosfwd>

@@ -13,7 +13,7 @@
 #include "cpporm/error.h"
 #include "cpporm/session_fwd.h"
 #include "cpporm/session_types.h"
-#include "cpporm_sqldriver/sql_query.h"
+#include "sqldriver/sql_query.h"
 // Forward declare types from cpporm_sqldriver that are used in signatures
 namespace cpporm_sqldriver {
     class SqlQuery;

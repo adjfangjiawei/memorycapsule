@@ -1,4 +1,4 @@
-// cpporm_sqldriver/sql_index.h
+// sqldriver/sql_index.h
 #pragma once
 #include <map>
 #include <memory>

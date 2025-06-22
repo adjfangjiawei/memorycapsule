@@ -1,4 +1,4 @@
-// cpporm_sqldriver/sql_driver_manager.h
+// sqldriver/sql_driver_manager.h
 #pragma once
 #include <functional>  // For std::function
 #include <memory>

@@ -15,7 +15,7 @@
 #include <set>
 
 // Include cpporm_sqldriver types
-#include "cpporm_sqldriver/sql_database.h"
+#include "sqldriver/sql_database.h"
 
 namespace cpporm {
 

@@ -1,1 +1,5 @@
 add_subdirectory(Neo4jBoltTransport)
+add_subdirectory(MySqlTransport)
+
+add_library(Transport INTERFACE)
+target_link_libraries(Transport INTERFACE Neo4jBoltTransport MySqlTransport)

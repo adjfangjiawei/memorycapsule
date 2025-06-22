@@ -1,4 +1,4 @@
-// cpporm_sqldriver/sql_connection_parameters.h
+// sqldriver/sql_connection_parameters.h
 #pragma once
 
 #include <map>

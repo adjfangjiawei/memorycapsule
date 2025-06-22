@@ -1,7 +1,7 @@
 // Source/sql_connection_parameters.cpp
-#include "cpporm_sqldriver/sql_connection_parameters.h"
+#include "sqldriver/sql_connection_parameters.h"
 
-#include "cpporm_sqldriver/sql_value.h"
+#include "sqldriver/sql_value.h"
 
 namespace cpporm_sqldriver {
 

@@ -6,9 +6,9 @@
 #include <string>  // 使用 std::string
 
 #include "cpporm/error.h"
-#include "cpporm_sqldriver/sql_connection_parameters.h"  // 新的连接参数
-#include "cpporm_sqldriver/sql_database.h"               // 新的数据库对象
-#include "cpporm_sqldriver/sql_driver_manager.h"         // 新的驱动管理器
+#include "sqldriver/sql_connection_parameters.h"  // 新的连接参数
+#include "sqldriver/sql_database.h"               // 新的数据库对象
+#include "sqldriver/sql_driver_manager.h"         // 新的驱动管理器
 
 namespace cpporm {
 

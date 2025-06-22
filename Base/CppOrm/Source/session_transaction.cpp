@@ -2,10 +2,10 @@
 #include <QDebug>
 
 #include "cpporm/session.h"
-#include "cpporm_sqldriver/sql_database.h"
-#include "cpporm_sqldriver/sql_driver_manager.h"
-#include "cpporm_sqldriver/sql_enums.h"
-#include "cpporm_sqldriver/sql_error.h"
+#include "sqldriver/sql_database.h"
+#include "sqldriver/sql_driver_manager.h"
+#include "sqldriver/sql_enums.h"
+#include "sqldriver/sql_error.h"
 
 namespace cpporm {
 

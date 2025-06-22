@@ -1,4 +1,4 @@
-// cpporm_sqldriver/sql_value.h
+// sqldriver/sql_value.h
 #pragma once
 #include <QByteArray>
 #include <QDate>

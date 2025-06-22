@@ -7,10 +7,10 @@
 #include "cpporm/model_base.h"
 #include "cpporm/query_builder.h"
 #include "cpporm/session.h"
-#include "cpporm_sqldriver/i_sql_driver.h"  // ISqlDriver for hasFeature
-#include "cpporm_sqldriver/sql_enums.h"     // Feature::LastInsertId, Feature::InsertAndReturnId
-#include "cpporm_sqldriver/sql_query.h"     // SqlQuery
-#include "cpporm_sqldriver/sql_value.h"     // SqlValue
+#include "sqldriver/i_sql_driver.h"  // ISqlDriver for hasFeature
+#include "sqldriver/sql_enums.h"     // Feature::LastInsertId, Feature::InsertAndReturnId
+#include "sqldriver/sql_query.h"     // SqlQuery
+#include "sqldriver/sql_value.h"     // SqlValue
 
 namespace cpporm {
 

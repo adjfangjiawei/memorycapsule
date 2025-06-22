@@ -1,4 +1,4 @@
-// cpporm_sqldriver/sql_error.h
+// sqldriver/sql_error.h
 #pragma once
 #include <optional>
 #include <string>

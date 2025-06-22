@@ -1,4 +1,4 @@
-// cpporm_sqldriver/sql_enums.h
+// sqldriver/sql_enums.h
 #pragma once
 
 namespace cpporm_sqldriver {

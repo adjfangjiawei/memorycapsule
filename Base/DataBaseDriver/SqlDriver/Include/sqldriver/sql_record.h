@@ -1,4 +1,4 @@
-// cpporm_sqldriver/sql_record.h
+// sqldriver/sql_record.h
 #pragma once
 #include <optional>  // For std::optional
 #include <string>

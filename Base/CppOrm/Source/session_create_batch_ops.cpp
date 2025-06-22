@@ -10,10 +10,10 @@
 #include "cpporm/session_priv_batch_helpers.h"  // FriendAccess is defined here
 
 // SqlDriver specific includes
-#include "cpporm_sqldriver/sql_database.h"
-#include "cpporm_sqldriver/sql_enums.h"  // For Feature::LastInsertId, Feature::InsertAndReturnId
-#include "cpporm_sqldriver/sql_query.h"  // For cpporm_sqldriver::SqlQuery
-#include "cpporm_sqldriver/sql_value.h"  // For cpporm_sqldriver::SqlValue
+#include "sqldriver/sql_database.h"
+#include "sqldriver/sql_enums.h"  // For Feature::LastInsertId, Feature::InsertAndReturnId
+#include "sqldriver/sql_query.h"  // For cpporm_sqldriver::SqlQuery
+#include "sqldriver/sql_value.h"  // For cpporm_sqldriver::SqlValue
 
 namespace cpporm {
 

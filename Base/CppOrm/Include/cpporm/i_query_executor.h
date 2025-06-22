@@ -13,8 +13,8 @@
 #include <vector>
 
 #include "cpporm/builder_parts/query_builder_state.h"
-#include "cpporm/model_base.h"           // ModelBase, ModelMeta (ModelBase 也会包含 query_builder_state.h)
-#include "cpporm_sqldriver/sql_value.h"  // 使用 SqlValue 替代 QVariant 作为原生DB交互类型
+#include "cpporm/model_base.h"    // ModelBase, ModelMeta (ModelBase 也会包含 query_builder_state.h)
+#include "sqldriver/sql_value.h"  // 使用 SqlValue 替代 QVariant 作为原生DB交互类型
 
 namespace cpporm {
 

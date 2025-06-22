@@ -1,4 +1,4 @@
-// cpporm_sqldriver/sql_query.h
+// sqldriver/sql_query.h
 #pragma once
 #include <functional>
 #include <future>

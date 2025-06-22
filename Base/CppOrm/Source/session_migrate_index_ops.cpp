@@ -9,10 +9,10 @@
 #include "cpporm/query_builder.h"
 #include "cpporm/session.h"
 #include "cpporm/session_migrate_priv.h"
-#include "cpporm_sqldriver/sql_database.h"
-#include "cpporm_sqldriver/sql_field.h"
-#include "cpporm_sqldriver/sql_query.h"
-#include "cpporm_sqldriver/sql_record.h"
+#include "sqldriver/sql_database.h"
+#include "sqldriver/sql_field.h"
+#include "sqldriver/sql_query.h"
+#include "sqldriver/sql_record.h"
 
 namespace cpporm {
     namespace internal {

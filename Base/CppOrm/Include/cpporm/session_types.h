@@ -8,7 +8,7 @@
 #include <typeindex>
 
 #include "cpporm/builder_parts/query_builder_state.h"  // For OnConflictClause, QueryValue
-#include "cpporm_sqldriver/sql_value.h"                // 使用 SqlValue
+#include "sqldriver/sql_value.h"                       // 使用 SqlValue
 
 namespace cpporm {
 

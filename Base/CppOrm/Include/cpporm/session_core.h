@@ -21,10 +21,10 @@
 #include "cpporm/query_builder.h"
 #include "cpporm/session_fwd.h"
 #include "cpporm/session_types.h"
-#include "cpporm_sqldriver/sql_database.h"
-#include "cpporm_sqldriver/sql_driver_manager.h"
-#include "cpporm_sqldriver/sql_query.h"
-#include "cpporm_sqldriver/sql_value.h"
+#include "sqldriver/sql_database.h"
+#include "sqldriver/sql_driver_manager.h"
+#include "sqldriver/sql_query.h"
+#include "sqldriver/sql_value.h"
 
 namespace cpporm {
     namespace internal_batch_helpers {

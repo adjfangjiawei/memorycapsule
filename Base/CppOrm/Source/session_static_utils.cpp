@@ -8,10 +8,10 @@
 #include "cpporm/error.h"
 #include "cpporm/model_base.h"
 #include "cpporm/session.h"
-#include "cpporm_sqldriver/sql_database.h"
-#include "cpporm_sqldriver/sql_error.h"
-#include "cpporm_sqldriver/sql_query.h"
-#include "cpporm_sqldriver/sql_value.h"
+#include "sqldriver/sql_database.h"
+#include "sqldriver/sql_error.h"
+#include "sqldriver/sql_query.h"
+#include "sqldriver/sql_value.h"
 
 namespace cpporm {
 
