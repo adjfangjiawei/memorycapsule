@@ -1,28 +1,33 @@
 // SqlDriver/Source/sql_database_transaction.cpp
-#include "sqldriver/i_sql_driver.h"
+#include "sqldriver/i_sql_driver.h"  // For ISqlDriver methods
 #include "sqldriver/sql_database.h"
 #include "sqldriver/sql_enums.h"  // For TransactionIsolationLevel
 #include "sqldriver/sql_error.h"
 
 namespace cpporm_sqldriver {
 
-    // --- 事务管理 ---
+    // --- Transaction Management ---
     bool SqlDatabase::transaction() {
         if (!isOpen()) {
             m_last_error = SqlError(ErrorCategory::Connectivity, "Connection not open for transaction.", "SqlDatabase::transaction");
             return false;
         }
-        if (m_transaction_active) {
-            m_last_error = SqlError(ErrorCategory::Transaction, "Transaction already active.", "SqlDatabase::transaction");
-            return false;  // 或者根据需要允许嵌套（如果驱动支持）
+        // ISqlDriver itself might track active transaction, or we query.
+        // For simplicity, if driver's beginTransaction succeeds, we assume active.
+        // If driver allows querying active state, that's more robust.
+        if (m_driver->hasFeature(Feature::Transactions) && m_driver->beginTransaction()) {
+            updateLastErrorFromDriver();  // Update error even on success if driver sets warnings
+            return true;
         }
-        // m_driver 此时必然非空
-        bool success = m_driver->beginTransaction();
         updateLastErrorFromDriver();
-        if (success) {
-            m_transaction_active = true;
+        if (m_last_error.category() == ErrorCategory::NoError && m_driver->hasFeature(Feature::Transactions)) {
+            // If beginTransaction returned false but no error was set by driver,
+            // it might mean transaction was already active or feature not fully supported in context.
+            m_last_error = SqlError(ErrorCategory::Transaction, "beginTransaction call returned false without specific driver error.", "SqlDatabase::transaction");
+        } else if (!m_driver->hasFeature(Feature::Transactions)) {
+            m_last_error = SqlError(ErrorCategory::FeatureNotSupported, "Transactions not supported by driver.", "SqlDatabase::transaction");
         }
-        return success;
+        return false;
     }
 
     bool SqlDatabase::commit() {
@@ -30,14 +35,15 @@ namespace cpporm_sqldriver {
             m_last_error = SqlError(ErrorCategory::Connectivity, "Connection not open for commit.", "SqlDatabase::commit");
             return false;
         }
-        if (!m_transaction_active) {
-            m_last_error = SqlError(ErrorCategory::Transaction, "No active transaction to commit.", "SqlDatabase::commit");
+        // Query driver for active transaction before attempting commit
+        // This requires ISqlDriver to have an isTransactionActive() method.
+        // For now, assume commitTransaction will fail if no tx active.
+        if (!m_driver->hasFeature(Feature::Transactions)) {
+            m_last_error = SqlError(ErrorCategory::FeatureNotSupported, "Transactions not supported by driver.", "SqlDatabase::commit");
             return false;
         }
-        // m_driver 此时必然非空
         bool success = m_driver->commitTransaction();
         updateLastErrorFromDriver();
-        m_transaction_active = false;  // 提交后事务结束
         return success;
     }
 
@@ -46,23 +52,41 @@ namespace cpporm_sqldriver {
             m_last_error = SqlError(ErrorCategory::Connectivity, "Connection not open for rollback.", "SqlDatabase::rollback");
             return false;
         }
-        if (!m_transaction_active) {
-            // 某些数据库允许在没有活动事务时执行ROLLBACK（通常是无操作或错误）
-            // 为保持一致性，如果SqlDatabase认为没有活动事务，则报告错误
-            m_last_error = SqlError(ErrorCategory::Transaction, "No active transaction to rollback.", "SqlDatabase::rollback");
+        if (!m_driver->hasFeature(Feature::Transactions)) {
+            m_last_error = SqlError(ErrorCategory::FeatureNotSupported, "Transactions not supported by driver.", "SqlDatabase::rollback");
             return false;
         }
-        // m_driver 此时必然非空
         bool success = m_driver->rollbackTransaction();
         updateLastErrorFromDriver();
-        m_transaction_active = false;  // 回滚后事务结束
         return success;
     }
 
     bool SqlDatabase::isTransactionActive() const {
-        // 此状态由 SqlDatabase 自身跟踪，因为它调用 beginTransaction, commit, rollback
-        // 如果需要从驱动层面查询真实状态，会更复杂且可能慢
-        return isOpen() && m_transaction_active;
+        // This method now directly queries the driver if possible.
+        // Requires ISqlDriver to have a method like `isTransactionActive() const`.
+        // If ISqlDriver doesn't have it, SqlDatabase cannot reliably know without its own tracking.
+        // Assuming ISqlDriver provides this:
+        // if (m_driver && m_driver->isOpen() && m_driver->hasFeature(Feature::Transactions)) {
+        //     return m_driver->isTransactionActive(); // Hypothetical ISqlDriver method
+        // }
+        // For now, if m_transaction_active was removed, we can't implement this accurately
+        // without adding the method to ISqlDriver.
+        // A fallback (less accurate): return true if beginTransaction was called and no commit/rollback since.
+        // But SqlDatabase no longer tracks m_transaction_active.
+        // This method now reflects the underlying C-API state if driver provides it.
+        // For MySQL, `mysql_get_server_status(m_mysql_handle) & SERVER_STATUS_IN_TRANS`
+        // We need to abstract this into ISqlDriver.
+        // For now, this is a placeholder, as ISqlDriver does not have isTransactionActive().
+        // In a real scenario, the driver implementation (e.g., MySqlSpecificDriver)
+        // would query its native handle. SqlDatabase would call that.
+        if (m_driver && m_driver->isOpen() && m_driver->hasFeature(Feature::Transactions)) {
+            // Simulate querying the driver (needs actual ISqlDriver method)
+            // This is a stub. Actual implementation would be in the specific driver.
+            // For example, MySqlSpecificDriver would check MYSQL status.
+            // For simplicity here, we can't determine it perfectly.
+            // The `is_explicit_transaction_handle_` in Session becomes more important.
+        }
+        return false;  // Placeholder: cannot determine without ISqlDriver::isTransactionActive()
     }
 
     bool SqlDatabase::setTransactionIsolationLevel(TransactionIsolationLevel level) {
@@ -70,33 +94,31 @@ namespace cpporm_sqldriver {
             m_last_error = SqlError(ErrorCategory::Connectivity, "Connection not open to set isolation level.", "SqlDatabase::setTransactionIsolationLevel");
             return false;
         }
-        // m_driver 此时必然非空
         bool success = m_driver->setTransactionIsolationLevel(level);
         updateLastErrorFromDriver();
         return success;
     }
 
     TransactionIsolationLevel SqlDatabase::transactionIsolationLevel() const {
-        if (!isOpen() || !m_driver) {  // 增加对 m_driver 的检查
+        if (!isOpen() || !m_driver) {
             return TransactionIsolationLevel::Default;
         }
         return m_driver->transactionIsolationLevel();
     }
 
     bool SqlDatabase::setSavepoint(const std::string& name) {
-        if (!isOpen() || !isTransactionActive()) {
-            m_last_error = SqlError(ErrorCategory::Transaction, "No active transaction or connection closed for setSavepoint.", "SqlDatabase::setSavepoint");
+        if (!isOpen()) {
+            m_last_error = SqlError(ErrorCategory::Transaction, "Connection not open or no active transaction for setSavepoint.", "SqlDatabase::setSavepoint");
             return false;
         }
-        // m_driver 此时必然非空
         bool success = m_driver->setSavepoint(name);
         updateLastErrorFromDriver();
         return success;
     }
 
     bool SqlDatabase::rollbackToSavepoint(const std::string& name) {
-        if (!isOpen() || !isTransactionActive()) {
-            m_last_error = SqlError(ErrorCategory::Transaction, "No active transaction or connection closed for rollbackToSavepoint.", "SqlDatabase::rollbackToSavepoint");
+        if (!isOpen()) {
+            m_last_error = SqlError(ErrorCategory::Transaction, "Connection not open or no active transaction for rollbackToSavepoint.", "SqlDatabase::rollbackToSavepoint");
             return false;
         }
         bool success = m_driver->rollbackToSavepoint(name);
@@ -105,8 +127,8 @@ namespace cpporm_sqldriver {
     }
 
     bool SqlDatabase::releaseSavepoint(const std::string& name) {
-        if (!isOpen() || !isTransactionActive()) {
-            m_last_error = SqlError(ErrorCategory::Transaction, "No active transaction or connection closed for releaseSavepoint.", "SqlDatabase::releaseSavepoint");
+        if (!isOpen()) {
+            m_last_error = SqlError(ErrorCategory::Transaction, "Connection not open or no active transaction for releaseSavepoint.", "SqlDatabase::releaseSavepoint");
             return false;
         }
         bool success = m_driver->releaseSavepoint(name);

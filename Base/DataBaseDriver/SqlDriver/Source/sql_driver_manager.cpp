@@ -2,12 +2,12 @@
 #include "sqldriver/sql_driver_manager.h"
 
 #include <map>
-#include <memory>  // For std::unique_ptr
+#include <memory>  // For std::shared_ptr and std::unique_ptr (factory can still return unique_ptr)
 #include <mutex>
-#include <stdexcept>  // For std::runtime_error
+#include <stdexcept>  // For std::runtime_error if needed
 
 #include "sqldriver/i_sql_driver.h"
-#include "sqldriver/sql_connection_parameters.h"
+#include "sqldriver/sql_connection_parameters.h"  // For ConnectionParameters in database() if needed
 #include "sqldriver/sql_database.h"
 #include "sqldriver/sql_error.h"
 
@@ -30,40 +30,35 @@ namespace cpporm_sqldriver {
             if (factory_it == factories.end()) {
                 // Driver type not registered, return SqlDatabase that will be invalid
                 // SqlDatabase constructor will set an error if driverInstance is null
-                return SqlDatabase(driverType, connectionName, nullptr);
+                return SqlDatabase(driverType, connectionName, nullptr);  // Pass nullptr shared_ptr
             }
             factory_to_call = factory_it->second;  // Get the factory
         }  // Mutex released here
 
-        std::unique_ptr<ISqlDriver> driverInstance = nullptr;
+        std::unique_ptr<ISqlDriver> unique_driver_instance = nullptr;  // Factory returns unique_ptr
         if (factory_to_call) {
             try {
-                driverInstance = factory_to_call();  // Call factory outside the lock
-            } catch (const std::exception& e) {
+                unique_driver_instance = factory_to_call();  // Call factory outside the lock
+            } catch (const std::exception& /*e*/) {
                 // Factory call threw an exception. driverInstance remains nullptr.
-                // The SqlDatabase constructor will handle the null driverInstance.
-                // Optionally log here, but SqlDatabase constructor will also "know".
-                // For example: some_logging_system("Driver factory for " + driverType + " threw: " + e.what());
+                // Optionally log here: some_logging_system("Driver factory for " + driverType + " threw: " + e.what());
             } catch (...) {
                 // Catch all for other potential issues from factory.
             }
         }
 
-        if (!driverInstance) {
+        // Convert unique_ptr to shared_ptr for SqlDatabase
+        std::shared_ptr<ISqlDriver> shared_driver_instance = std::move(unique_driver_instance);
+
+        if (!shared_driver_instance) {
             // Factory failed to create driver instance or factory_to_call was null after lock release.
-            return SqlDatabase(driverType, connectionName, nullptr);
+            return SqlDatabase(driverType, connectionName, nullptr);  // Pass nullptr shared_ptr
         }
 
-        return SqlDatabase(driverType, connectionName, std::move(driverInstance));
+        return SqlDatabase(driverType, connectionName, std::move(shared_driver_instance));
     }
 
     SqlDatabase SqlDriverManager::database(const std::string& connectionName, bool open) {
-        // This method's purpose is primarily to support Qt's QSqlDatabase::database() model.
-        // In our design, DbManager::openDatabase is the preferred way to get a configured and opened SqlDatabase.
-        // If called with a non-default name, it implies a pre-configured, named connection,
-        // which SqlDriverManager doesn't directly manage beyond driver factories.
-        // For the default connection, it might try to use the first registered driver.
-
         std::string driverTypeToUse;
         DriverFactory factory_to_call = nullptr;
 
@@ -80,13 +75,7 @@ namespace cpporm_sqldriver {
                     return SqlDatabase("NoDriversRegistered", connectionName, nullptr);
                 }
             } else {
-                // For non-default connection names, this manager doesn't store specific
-                // configurations or active instances. It can only create a new SqlDatabase
-                // if `connectionName` is treated as `driverType`.
-                // This is likely a misuse if `connectionName` is dynamic like "cpporm_sqldrv_conn_1".
-                // However, if a user explicitly calls SqlDriverManager::database("MYSQL", true),
-                // it should work like addDatabase("MYSQL", "MYSQL").
-                // For robustness, let's assume `connectionName` here could be a `driverType`.
+                // For non-default connection names, if `connectionName` is intended to be a `driverType`.
                 auto factory_it = factories.find(connectionName);
                 if (factory_it != factories.end()) {
                     driverTypeToUse = factory_it->first;
@@ -98,54 +87,50 @@ namespace cpporm_sqldriver {
             }
         }  // Mutex released
 
-        std::unique_ptr<ISqlDriver> driverInstance = nullptr;
+        std::unique_ptr<ISqlDriver> unique_driver_instance = nullptr;
         if (factory_to_call) {
             try {
-                driverInstance = factory_to_call();
+                unique_driver_instance = factory_to_call();
             } catch (...) { /* Factory failed */
             }
         } else {
-            // This case should ideally not be hit if factory_it was valid.
-            // Could happen if defaultConnectionName path had no factories.
+            // This case means factory_to_call was null after lock release.
             return SqlDatabase(driverTypeToUse.empty() ? "UnknownDriver" : driverTypeToUse, connectionName, nullptr);
         }
 
-        SqlDatabase db(driverTypeToUse, connectionName, std::move(driverInstance));
+        std::shared_ptr<ISqlDriver> shared_driver_instance = std::move(unique_driver_instance);
+        SqlDatabase db(driverTypeToUse, connectionName, std::move(shared_driver_instance));
 
         if (open && db.isValid()) {
-            // To open, SqlDatabase::open() needs ConnectionParameters.
-            // The `db` object has its own m_parameters, which are initially empty.
-            // This `open()` call will likely use default parameters or fail if the driver requires specific ones.
-            // Unlike DbManager, SqlDriverManager doesn't have the `DbConfig` to populate detailed params.
-            // This means the `open=true` here is less useful unless default driver params are sufficient.
-            db.open();  // Attempt to open with internal (likely default/empty) parameters
-                        // The success/failure and error are handled within db.open() and accessible via db.lastError().
+            // SqlDatabase::open() will use its internally stored m_parameters.
+            // If these are empty, it depends on the driver's default behavior.
+            db.open();
         }
         return db;
     }
 
     void SqlDriverManager::removeDatabase(const std::string& /*connectionName*/) {
+        // In the current design where SqlDriverManager doesn't manage active SqlDatabase
+        // instances or named configurations (beyond factories by driver type), this method
+        // is largely conceptual. If it were to remove a configuration for a 'connectionName',
+        // that would require storing such configurations.
+        // For now, it's a no-op concerning active connections, as Session owns its SqlDatabase.
         std::lock_guard<std::mutex> lock(data().managerMutex);
-        // In the current design, SqlDriverManager does not manage SqlDatabase instances
-        // or named configurations beyond factories. So, this is largely a conceptual no-op
-        // unless we expand its role to store/manage configurations per connectionName.
+        // If 'data().namedConnectionParams' or similar existed, one would erase from it here.
     }
 
     bool SqlDriverManager::contains(const std::string& connectionName) {
+        // This checks if a driver factory exists for the given name (if treated as driverType)
+        // or if it's the default name and any driver is registered.
+        // It does NOT check if an active SqlDatabase instance with this name exists.
         std::lock_guard<std::mutex> lock(data().managerMutex);
-        // If we only manage driver factories by type, checking if a 'connectionName'
-        // (which could be dynamic) "contains" is tricky.
-        // It could mean: "is there a configuration for this name?" (not implemented)
-        // or "is the default connection name configured?"
-        // or "is connectionName a registered driver type?".
-        // For now, if it's the default connection name, it "contains" if any driver is registered.
-        // If it's another name, it "contains" if that name is a registered driver type.
         if (connectionName == defaultConnectionName()) {
             return !data().driverFactories.empty();
         }
         return data().driverFactories.count(connectionName) > 0;
     }
 
+    // --- Driver Information ---
     std::vector<std::string> SqlDriverManager::drivers() {
         std::lock_guard<std::mutex> lock(data().managerMutex);
         std::vector<std::string> driver_names;
@@ -162,13 +147,11 @@ namespace cpporm_sqldriver {
     }
 
     std::string SqlDriverManager::defaultConnectionName() {
-        // No lock needed for reading a const static member after initialization
-        // or if data().defaultConnName is itself thread-safe / constant after init.
-        // However, to be consistent with `data()` access:
-        std::lock_guard<std::mutex> lock(data().managerMutex);
+        std::lock_guard<std::mutex> lock(data().managerMutex);  // Ensure consistent access pattern to data()
         return data().defaultConnName;
     }
 
+    // --- Driver Registration ---
     bool SqlDriverManager::registerDriver(const std::string& driverName, DriverFactory factory) {
         if (driverName.empty() || !factory) {
             return false;
