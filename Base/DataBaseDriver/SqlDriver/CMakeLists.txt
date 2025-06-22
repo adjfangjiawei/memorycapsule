@@ -11,7 +11,7 @@ target_include_directories(SqlDriver
         "${CMAKE_CURRENT_SOURCE_DIR}/Include"
 )
 
-target_link_libraries(SqlDriver PUBLIC Qt6::Core)
+target_link_libraries(SqlDriver PUBLIC Qt6::Core MySqlTransport)
 
 # # build example, no condition
 # add_subdirectory(Example)

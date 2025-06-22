@@ -1,4 +1,4 @@
-// cpporm_mysql_transport/mysql_transport_connection.h
+// Include/cpporm_mysql_transport/mysql_transport_connection.h
 #pragma once
 
 #include <mysql/mysql.h>
@@ -24,7 +24,8 @@
 #include "cpporm_mysql_transport/mysql_transport_connection_options_setter.h"
 #include "cpporm_mysql_transport/mysql_transport_server_info_provider.h"
 #include "cpporm_mysql_transport/mysql_transport_transaction_manager.h"
-#include "cpporm_mysql_transport/mysql_transport_types.h"
+#include "cpporm_mysql_transport/mysql_transport_types.h"  // For MySqlTransportConnectionParams, MySqlNativeValue (via protocol)
+#include "mysql_protocol/mysql_type_converter.h"           // For MySqlNativeValue if not fully via types.h
 
 namespace cpporm_mysql_transport {
 
@@ -69,7 +70,11 @@ namespace cpporm_mysql_transport {
         std::string getHostInfo() const;
 
         MySqlTransportError getLastError() const;
+
+        // Utility methods
         std::string escapeString(const std::string& unescaped_str, bool treat_backslash_as_meta = true);
+        std::string formatNativeValueAsLiteral(const mysql_protocol::MySqlNativeValue& nativeValue) const;
+        std::string escapeSqlIdentifier(const std::string& identifier) const;
 
         MYSQL* getNativeHandle() const {
             return m_mysql_handle;

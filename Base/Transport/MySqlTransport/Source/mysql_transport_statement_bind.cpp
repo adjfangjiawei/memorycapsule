@@ -1,13 +1,11 @@
 // cpporm_mysql_transport/mysql_transport_index_lister.cpp
-#include "cpporm_mysql_transport/mysql_transport_index_lister.h"
-
 #include <mysql/mysql.h>
 
 #include <algorithm>
 #include <map>
-#include <vector>  // Required for std::vector
 
 #include "cpporm_mysql_transport/mysql_transport_connection.h"
+#include "cpporm_mysql_transport/mysql_transport_index_lister.h"
 #include "cpporm_mysql_transport/mysql_transport_result.h"
 #include "cpporm_mysql_transport/mysql_transport_statement.h"
 #include "mysql_protocol/mysql_type_converter.h"
@@ -33,9 +31,7 @@ namespace cpporm_mysql_transport {
             m_last_error = m_conn_ctx->getLastError();
             std::string combined_msg = context;
             if (!m_last_error.message.empty()) {
-                if (!combined_msg.empty()) {
-                    combined_msg += ": ";
-                }
+                if (!combined_msg.empty()) combined_msg += ": ";
                 combined_msg += m_last_error.message;
             }
             m_last_error.message = combined_msg;
@@ -74,7 +70,7 @@ namespace cpporm_mysql_transport {
         std::unique_ptr<MySqlTransportStatement> stmt = m_conn_ctx->createStatement(query);
         if (!stmt || (stmt->getNativeStatementHandle() == nullptr && !stmt->getError().isOk())) {
             setErrorFromConnection_("Failed to create statement for getTableIndexes for " + fq_table_name);
-            if (stmt && !stmt->getError().isOk()) {
+            if (stmt && !stmt->getError().isOk()) {  // If stmt was created but failed internally
                 m_last_error = stmt->getError();
             }
             return std::nullopt;
@@ -99,10 +95,10 @@ namespace cpporm_mysql_transport {
         int idx_index_type = result->getFieldIndex("Index_type");
         int idx_comment = result->getFieldIndex("Comment");
         int idx_index_comment = result->getFieldIndex("Index_comment");
-        int idx_visible = result->getFieldIndex("Visible");
-        int idx_expression = result->getFieldIndex("Expression");
+        int idx_visible = result->getFieldIndex("Visible");        // MySQL 8+
+        int idx_expression = result->getFieldIndex("Expression");  // MySQL 8+ for functional indexes
 
-        if (idx_key_name == -1 || idx_column_name == -1 || idx_seq_in_index == -1 || idx_table == -1 || idx_non_unique == -1 || idx_index_type == -1) {
+        if (idx_key_name == -1 || idx_column_name == -1 || idx_seq_in_index == -1 || idx_table == -1 || idx_non_unique == -1 || idx_index_type == -1) {  // idx_null might not always be present or critical in all versions/outputs
             setError_(MySqlTransportError::Category::InternalError, "Could not find one or more required columns in SHOW INDEX output.");
             return std::nullopt;
         }
@@ -144,9 +140,7 @@ namespace cpporm_mysql_transport {
                         index_info.isNonUnique = (*pval_i32_opt == 1);
                         nu_val_set = true;
                     }
-                    if (!nu_val_set) {
-                        index_info.isNonUnique = true;
-                    }
+                    if (!nu_val_set) index_info.isNonUnique = true;  // Default
                 }
                 index_info.indexName = key_name_str_val;
 
@@ -156,7 +150,7 @@ namespace cpporm_mysql_transport {
                     }
                 }
 
-                if (idx_comment != -1) {
+                if (idx_comment != -1) {  // Check if column exists
                     if (auto val_opt = result->getValue(static_cast<unsigned int>(idx_comment))) {
                         if (!val_opt->is_null()) {
                             if (auto s_opt = val_opt->get_if<std::string>()) {
@@ -165,7 +159,7 @@ namespace cpporm_mysql_transport {
                         }
                     }
                 }
-                if (idx_index_comment != -1) {
+                if (idx_index_comment != -1) {  // Check if column exists
                     if (auto val_opt = result->getValue(static_cast<unsigned int>(idx_index_comment))) {
                         if (!val_opt->is_null()) {
                             if (auto s_opt = val_opt->get_if<std::string>()) {
@@ -174,20 +168,21 @@ namespace cpporm_mysql_transport {
                         }
                     }
                 }
-                if (idx_visible != -1) {
+                if (idx_visible != -1) {  // Check if column exists (MySQL 8+)
                     if (auto val_opt = result->getValue(static_cast<unsigned int>(idx_visible))) {
                         if (!val_opt->is_null()) {
                             if (auto s_opt = val_opt->get_if<std::string>()) {
                                 index_info.isVisible = (*s_opt == "YES" || *s_opt == "1");
                             }
+                            // else if other types for visible...
                         } else {
                             index_info.isVisible = true;
-                        }
+                        }  // Assuming NULL means visible or default
                     } else {
                         index_info.isVisible = true;
-                    }
+                    }  // Default if value is not there
                 } else {
-                    index_info.isVisible = true;
+                    index_info.isVisible = true;  // Default for older MySQL
                 }
                 it = index_map.insert({key_name_str_val, index_info}).first;
             }
@@ -215,7 +210,7 @@ namespace cpporm_mysql_transport {
                 }
             }
 
-            if (idx_collation != -1) {
+            if (idx_collation != -1) {  // Check if column exists
                 if (auto val_opt = result->getValue(static_cast<unsigned int>(idx_collation))) {
                     if (!val_opt->is_null()) {
                         if (auto s_opt = val_opt->get_if<std::string>()) {
@@ -224,7 +219,7 @@ namespace cpporm_mysql_transport {
                     }
                 }
             }
-            if (idx_cardinality != -1) {
+            if (idx_cardinality != -1) {  // Check if column exists
                 if (auto val_opt = result->getValue(static_cast<unsigned int>(idx_cardinality))) {
                     if (!val_opt->is_null()) {
                         if (auto pval_u64_opt = val_opt->get_if<uint64_t>()) {
@@ -239,7 +234,7 @@ namespace cpporm_mysql_transport {
                     }
                 }
             }
-            if (idx_sub_part != -1) {
+            if (idx_sub_part != -1) {  // Check if column exists
                 if (auto val_opt = result->getValue(static_cast<unsigned int>(idx_sub_part))) {
                     if (!val_opt->is_null()) {
                         if (auto pval_u64_opt = val_opt->get_if<uint64_t>()) {
@@ -255,23 +250,24 @@ namespace cpporm_mysql_transport {
                 }
             }
 
+            // Ensure idx_null is valid before using it
             if (idx_null != -1) {
                 if (auto val_opt = result->getValue(static_cast<unsigned int>(idx_null))) {
                     if (!val_opt->is_null()) {
                         if (auto s_opt = val_opt->get_if<std::string>()) {
                             col_def.isNullable = (*s_opt == "YES");
                         }
-                    } else {
+                    } else {  // SQL NULL in "Null" column implies column is NOT NULL by convention of SHOW INDEX
                         col_def.isNullable = false;
                     }
-                } else {
+                } else {  // If getValue returns no optional, assume not nullable for safety.
                     col_def.isNullable = false;
                 }
-            } else {
-                col_def.isNullable = false;  // Default if "Null" column is not present.
+            } else {  // If "Null" column is not present, assume not nullable as a fallback.
+                col_def.isNullable = false;
             }
 
-            if (idx_expression != -1) {
+            if (idx_expression != -1) {  // Check if column exists (MySQL 8+)
                 if (auto val_opt = result->getValue(static_cast<unsigned int>(idx_expression))) {
                     if (!val_opt->is_null()) {
                         if (auto s_opt = val_opt->get_if<std::string>()) {
