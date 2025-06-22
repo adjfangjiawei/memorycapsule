@@ -7,6 +7,7 @@
 #include "sqldriver/mysql/mysql_driver_helper.h"
 #include "sqldriver/mysql/mysql_specific_driver.h"
 #include "sqldriver/mysql/mysql_specific_result.h"
+#include "sqldriver/sql_driver_manager.h"  // Needed for registration
 
 namespace cpporm_sqldriver {
 
@@ -159,6 +160,14 @@ namespace cpporm_sqldriver {
 
     cpporm_mysql_transport::MySqlTransportConnection* MySqlSpecificDriver::getTransportConnection() const {
         return m_transport_connection.get();
+    }
+
+    // 驱动初始化函数定义
+    void MySqlDriver_Initialize() {
+        SqlDriverManager::registerDriver("MYSQL",  // This is the key used in DbConfig.driver_type
+                                         []() -> std::unique_ptr<ISqlDriver> {
+                                             return std::make_unique<MySqlSpecificDriver>();
+                                         });
     }
 
 }  // namespace cpporm_sqldriver

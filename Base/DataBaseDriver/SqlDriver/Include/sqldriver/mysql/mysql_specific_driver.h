@@ -83,4 +83,7 @@ namespace cpporm_sqldriver {
         std::string resolveSchemaName(const std::string& schemaFilterFromArgs) const;
     };
 
+    // 驱动初始化函数声明
+    void MySqlDriver_Initialize();
+
 }  // namespace cpporm_sqldriver

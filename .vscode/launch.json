@@ -4,7 +4,7 @@
             "name": "QuanMinXiYouClient",
             "type": "lldb",
             "request": "launch",
-            "program": "${workspaceFolder}/Build/CppGorm_runner"
+            "program": "${workspaceFolder}/Build/Base/CppOrm/Example/CppOrmMySqlExample"
         }
     ]
 }

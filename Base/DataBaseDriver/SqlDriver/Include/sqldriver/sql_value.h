@@ -1,9 +1,10 @@
-// sqldriver/sql_value.h
+// SqlDriver/Include/sqldriver/sql_value.h
 #pragma once
 #include <QByteArray>
 #include <QDate>
 #include <QDateTime>
 #include <QTime>
+#include <QTimeZone>  // For Qt 6 deprecated API fixes
 #include <QVariant>
 #include <any>
 #include <chrono>
@@ -33,9 +34,9 @@ namespace cpporm_sqldriver {
         LongDouble,
         String,
         FixedString,
-        ByteArray,
-        BinaryLargeObject,
-        CharacterLargeObject,
+        ByteArray,             // Represents a byte sequence, from QByteArray or std::vector<unsigned char>
+        BinaryLargeObject,     // Semantic type for BLOB stream (uses InputStreamPtr in variant)
+        CharacterLargeObject,  // Semantic type for CLOB stream (uses InputStreamPtr in variant)
         Date,
         Time,
         DateTime,
@@ -58,10 +59,8 @@ namespace cpporm_sqldriver {
         using ChronoDate = std::chrono::year_month_day;
         using ChronoTime = std::chrono::nanoseconds;
         using ChronoDateTime = std::chrono::system_clock::time_point;
-        using BlobInputStream = std::shared_ptr<std::istream>;
-        using BlobOutputStream = std::shared_ptr<std::ostream>;
-        using ClobInputStream = std::shared_ptr<std::basic_istream<char>>;
-        using ClobOutputStream = std::shared_ptr<std::basic_ostream<char>>;
+
+        using InputStreamPtr = std::shared_ptr<std::istream>;  // 通用输入流指针
 
         SqlValue();
         SqlValue(std::nullptr_t);
@@ -79,15 +78,10 @@ namespace cpporm_sqldriver {
         SqlValue(long double val);
         SqlValue(const char* val, SqlValueType type_hint = SqlValueType::String);
         SqlValue(const std::string& val, SqlValueType type_hint = SqlValueType::String);
-        SqlValue(const std::vector<unsigned char>& val);
+        SqlValue(const std::vector<unsigned char>& val);  // 用于原始字节
 
-        // SqlValue(const SqlDecimal& val);
-        // SqlValue(const SqlJsonDocument& val);
-        // SqlValue(const SqlXmlDocument& val);
-        // template<typename T> SqlValue(const SqlArray<T>& val);
-
-        SqlValue(BlobInputStream stream_handle, long long size = -1);
-        SqlValue(ClobInputStream stream_handle, long long size = -1, const std::string& charset = "UTF-8");
+        // LOB 流构造函数 (使用通用 InputStreamPtr 和一个类型提示)
+        SqlValue(InputStreamPtr stream_handle, SqlValueType lob_type /* 必须是 BinaryLargeObject 或 CharacterLargeObject */, long long size = -1);
 
         SqlValue(const QByteArray& val);
         SqlValue(const QDate& val);
@@ -110,29 +104,24 @@ namespace cpporm_sqldriver {
         const char* typeName() const;
         std::string driverTypeName() const;
         void setDriverTypeName(const std::string& name);
+        long long lobSizeHint() const;
 
         bool toBool(bool* ok = nullptr) const;
         int8_t toInt8(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
         uint8_t toUInt8(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
         int16_t toInt16(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
         uint16_t toUInt16(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
-        int32_t toInt32(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;    // Corresponds to 'int'
-        uint32_t toUInt32(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;  // Corresponds to 'unsigned int'
-        int64_t toInt64(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;    // Corresponds to 'long long'
-        uint64_t toUInt64(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;  // Corresponds to 'unsigned long long'
+        int32_t toInt32(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
+        uint32_t toUInt32(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
+        int64_t toInt64(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
+        uint64_t toUInt64(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
         float toFloat(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
         double toDouble(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
         long double toLongDouble(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
         std::string toString(bool* ok = nullptr, NumericalPrecisionPolicy policy = NumericalPrecisionPolicy::LowPrecision) const;
         std::vector<unsigned char> toStdVectorUChar(bool* ok = nullptr) const;
 
-        // SqlDecimal toDecimal(bool* ok = nullptr) const;
-        // SqlJsonDocument toJsonDocument(bool* ok = nullptr) const;
-        // SqlXmlDocument toXmlDocument(bool* ok = nullptr) const;
-        // template<typename T> std::optional<SqlArray<T>> toArray(bool* ok = nullptr) const;
-
-        BlobInputStream toBlobInputStream(bool* ok = nullptr) const;
-        ClobInputStream toClobInputStream(bool* ok = nullptr) const;
+        InputStreamPtr toInputStream(bool* ok = nullptr) const;  // 通用获取输入流方法
 
         QByteArray toByteArray(bool* ok = nullptr) const;
         QDate toDate(bool* ok = nullptr) const;
@@ -155,35 +144,39 @@ namespace cpporm_sqldriver {
         static SqlValue fromStdAny(const std::any& val, SqlValueType type_hint = SqlValueType::Custom);
 
       private:
-        using StorageType = std::variant<std::monostate,
-                                         bool,
-                                         int8_t,
-                                         uint8_t,
-                                         int16_t,
-                                         uint16_t,
-                                         int32_t,
-                                         uint32_t,
-                                         int64_t,
-                                         uint64_t,
-                                         float,
-                                         double,
-                                         long double,
-                                         std::string,
-                                         std::vector<unsigned char>,
-                                         BlobInputStream,
-                                         ClobInputStream,
-                                         QByteArray,
-                                         QDate,
-                                         QTime,
-                                         QDateTime,
-                                         ChronoDate,
-                                         ChronoTime,
-                                         ChronoDateTime,
-                                         std::any>;
-        StorageType value_;
-        SqlValueType current_type_enum_ = SqlValueType::Null;
-        std::string driver_type_name_;
-        void updateCurrentTypeEnum();
+        // StorageType 确保类型不重复
+        using StorageType = std::variant<  // 索引从0开始
+            std::monostate,                // 0: Null
+            bool,                          // 1
+            int8_t,                        // 2
+            uint8_t,                       // 3
+            int16_t,                       // 4
+            uint16_t,                      // 5
+            int32_t,                       // 6
+            uint32_t,                      // 7
+            int64_t,                       // 8
+            uint64_t,                      // 9
+            float,                         // 10
+            double,                        // 11
+            long double,                   // 12
+            std::string,                   // 13: String, FixedString, CLOB data, Json, Xml, Decimal, Numeric
+            std::vector<unsigned char>,    // 14: ByteArray, BLOB data (non-stream)
+            InputStreamPtr,                // 15: BLOB/CLOB streams
+            QDate,                         // 16
+            QTime,                         // 17
+            QDateTime,                     // 18
+            ChronoDate,                    // 19
+            ChronoTime,                    // 20
+            ChronoDateTime,                // 21
+            std::any                       // 22: Custom
+            >;
+
+        StorageType m_value_storage;
+        SqlValueType m_current_type_enum;
+        std::string m_driver_type_name_cache;
+        long long m_lob_size_hint;
+
+        void updateCurrentTypeEnumFromStorage();
     };
 
 }  // namespace cpporm_sqldriver

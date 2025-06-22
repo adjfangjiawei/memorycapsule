@@ -1,0 +1,54 @@
+"**MySQL C API `MYSQL_BIND` 结构体与布尔/NULL 指示符的正确使用指南 (针对现代 API)**
+
+**核心原则：**
+
+1.  **`MYSQL_BIND::is_null` 成员的类型**：在现代 MySQL C API (libmysqlclient) 中，`MYSQL_BIND` 结构体的 `is_null` 成员是一个指针，其指向的**实际类型是 `bool`**。因此，`is_null` 的类型是 `bool*`。任何时候都不要假设或使用已废弃的 `my_bool` 类型或直接使用 `char*` 来代替 `bool*` (除非是为了解决 `std::vector<bool>` 特化问题而采用的特定存储策略，见下文)。
+
+2.  **`MYSQL_BIND::buffer` 用于布尔数据**：当 `MYSQL_BIND::buffer_type` 设置为 `MYSQL_TYPE_TINY` 以表示布尔值时，`MYSQL_BIND::buffer` 指针应指向一个实际存储**单个字节**的内存区域，该字节的值为 `0` (代表 false) 或 `1` (代表 true)。通常使用 `char` 或 `unsigned char` 作为这个字节的类型。
+
+**常见陷阱及正确做法：**
+
+*   **`std::vector<bool>` 的特化问题**：
+    *   **问题**：`std::vector<bool>` 是一个特化版本，其 `operator[]` 返回的是一个代理对象 (如 `std::vector<bool>::reference`)，而不是一个真正的 `bool&`。因此，**不能**直接对 `std::vector<bool>` 的元素取地址（例如 `&my_vector_bool[i]`）来获取一个稳定的 `bool*` 赋给 `MYSQL_BIND::is_null`。这会导致编译错误或未定义行为。
+    *   **正确做法**：
+        1.  **存储 `is_null` 指示符**：为了给 `MYSQL_BIND::is_null` (类型 `bool*`) 提供稳定的指针，**不能**直接依赖 `std::vector<bool>` 的元素地址。推荐的做法是使用一个其元素可以安全取地址的容器来存储实际的 `bool` 值。例如：
+            *   `std::vector<char> is_null_storage;` (存储 0 或 1)
+            *   `std::vector<unsigned char> is_null_storage;` (存储 0 或 1)
+            *   `std::deque<bool> is_null_storage;` (deque 的元素是真正的 bool，可以取地址)
+        2.  **赋值给 `MYSQL_BIND::is_null`**：
+            *   如果你选择用 `std::vector<char>` 或 `std::vector<unsigned char>` (存储 0 或 1) 来作为 `is_null` 状态的**底层存储**，那么在将地址赋给 `MYSQL_BIND::is_null` (类型 `bool*`) 时，必须进行 `reinterpret_cast<bool*>()`。**这是基于 MySQL C API 在实践中通常能够将指向存储 0/1 的字节的指针正确解释为布尔状态这一事实。这是为了绕过 `std::vector<bool>` 特化问题的一种常见但需谨慎使用的技术性妥协。**
+            *   如果你选择用 `std::deque<bool>`，则可以直接取元素地址：`&my_deque_bool[i]`。
+            *   如果你为每个绑定参数维护单独的 `bool` 变量，则直接取其地址。
+
+*   **`std::memset` 的使用**：
+    *   **问题**：`std::memset` 的第一个参数期望的是 `void*` 类型。
+    *   **正确做法**：当使用 `std::memset` 初始化 `MYSQL_BIND` 结构体时，应传递该结构体对象的地址并进行 `static_cast<void*>()` 转换，例如：`std::memset(static_cast<void*>(&my_bind_struct), 0, sizeof(MYSQL_BIND));`。
+
+*   **`MYSQL_BIND::is_unsigned` 对于布尔值**：
+    *   当 `buffer_type` 是 `MYSQL_TYPE_TINY` 用于表示布尔值时，`is_unsigned` 字段通常应设置为 `0` (false)，因为布尔值通常不被视为无符号数，即使其底层存储可能是 0 或 1。
+
+**示例（采用 `std::vector<unsigned char>` 存储 `is_null` 指示符）：**
+
+```cpp
+// 成员变量
+std::vector<MYSQL_BIND> m_bind_buffers;
+std::vector<std::vector<unsigned char>> m_param_data_buffers; // 用于存储实际参数数据
+std::vector<unsigned char> m_param_is_null_indicators_storage; // 存储 0 (非NULL) 或 1 (NULL)
+std::vector<unsigned long> m_param_length_indicators;
+
+// 在 bindParam 方法中:
+// ... 初始化和大小调整 m_param_is_null_indicators_storage ...
+m_param_is_null_indicators_storage[i] = native_val.is_null() ? 1 : 0;
+current_mysql_bind.is_null = reinterpret_cast<bool*>(&m_param_is_null_indicators_storage[i]);
+
+// ... 当处理实际的 bool 类型数据 (native_val.data 是 bool) 时 ...
+if constexpr (std::is_same_v<T, bool>) {
+    m_param_data_buffers[i].resize(sizeof(unsigned char)); // 或 char
+    unsigned char bool_byte_representation = arg ? 1 : 0;
+    std::memcpy(m_param_data_buffers[i].data(), &bool_byte_representation, sizeof(unsigned char));
+    current_mysql_bind.buffer = static_cast<void*>(m_param_data_buffers[i].data());
+    current_mysql_bind.buffer_length = sizeof(unsigned char);
+    current_mysql_bind.buffer_type = MYSQL_TYPE_TINY;
+    current_mysql_bind.is_unsigned = 0; // 布尔通常不标记为 unsigned
+}
+// ...

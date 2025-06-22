@@ -1,153 +1,91 @@
-// SqlDriver/Source/mysql/mysql_error_converter.cpp
-#include <mysql/errmsg.h>  // Explicitly include for CR_* client error codes
-#include <mysql/mysql.h>   // General MySQL header, should pull in errmsg.h for CR_*
-
+// SqlDriver/Source/mysql/mysql_metadata_converter.cpp
 #include "sqldriver/mysql/mysql_driver_helper.h"
+#include "sqldriver/sql_field.h"
+#include "sqldriver/sql_index.h"
+#include "sqldriver/sql_record.h"
+#include "sqldriver/sql_value.h"  // For SqlValueType
 
-// Server error codes (ER_*) are problematic to include directly sometimes.
-// We will use their numeric values.
-// Common server error codes (for reference, not as macros here):
-// ER_ACCESS_DENIED_ERROR           1045
-// ER_DBACCESS_DENIED_ERROR         1044
-// ER_PARSE_ERROR                   1064
-// ER_SYNTAX_ERROR                  1149 (less common, 1064 is typical)
-// ER_DUP_ENTRY                     1062
-// ER_NO_REFERENCED_ROW_2           1452
-// ER_ROW_IS_REFERENCED_2           1451
-// ER_TABLEACCESS_DENIED_ERROR      1142
-// ER_COLUMNACCESS_DENIED_ERROR     1143
-// ER_LOCK_WAIT_TIMEOUT             1205
-// ER_LOCK_DEADLOCK                 1213
-// ER_DATA_TOO_LONG                 1406
-// ER_TRUNCATED_WRONG_VALUE_FOR_FIELD 1366
-// ER_TRUNCATED_WRONG_VALUE         1292
-// ER_BAD_NULL_ERROR                1048
-// ER_BAD_FIELD_ERROR               1054 (Unknown column)
-// ER_NO_SUCH_TABLE                 1146
+// Make sure these are included for the transport types
+#include "cpporm_mysql_transport/mysql_transport_types.h"
 
 namespace cpporm_sqldriver {
     namespace mysql_helper {
 
-        SqlError transportErrorToSqlError(const ::cpporm_mysql_transport::MySqlTransportError& transportError) {
-            ErrorCategory category = ErrorCategory::Unknown;
-            std::string db_text = transportError.native_mysql_error_msg;
-            if (db_text.empty()) {
-                db_text = transportError.message;
-            }
-            std::string driver_text = transportError.message;
+        // --- Implementation for metaToSqlField ---
+        SqlField metaToSqlField(const ::cpporm_mysql_transport::MySqlTransportFieldMeta& transportMeta) {
+            SqlField field(transportMeta.name,
+                           mySqlColumnTypeToSqlValueType(transportMeta.native_type_id, transportMeta.flags),  // Assuming this helper exists and is correct
+                           "");                                                                               // SqlField's db_type_name will be set if parseMySQLTypeStringInternal in transport layer was more detailed
 
-            switch (transportError.category) {
-                case ::cpporm_mysql_transport::MySqlTransportError::Category::NoError:
-                    category = ErrorCategory::NoError;
-                    break;
-                case ::cpporm_mysql_transport::MySqlTransportError::Category::ConnectionError:
-                    category = ErrorCategory::Connectivity;
-                    if (transportError.native_mysql_errno == CR_CONN_HOST_ERROR || transportError.native_mysql_errno == CR_CONNECTION_ERROR) {
-                        // category remains Connectivity
-                    } else if (transportError.native_mysql_errno == 1045) {  // ER_ACCESS_DENIED_ERROR
-                        category = ErrorCategory::Permissions;
-                    } else if (transportError.native_mysql_errno == CR_SERVER_GONE_ERROR || transportError.native_mysql_errno == CR_SERVER_LOST) {
-                        category = ErrorCategory::Connectivity;
-                    }
-                    break;
-                case ::cpporm_mysql_transport::MySqlTransportError::Category::QueryError:
-                    switch (transportError.native_mysql_errno) {
-                        case 1064:  // ER_PARSE_ERROR
-                        case 1149:  // ER_SYNTAX_ERROR (alternative, less common)
-                            category = ErrorCategory::Syntax;
-                            break;
-                        case 1062:  // ER_DUP_ENTRY
-                        case 1451:  // ER_ROW_IS_REFERENCED_2
-                        case 1452:  // ER_NO_REFERENCED_ROW_2
-                        case 1216:  // ER_NO_REFERENCED_ROW (older)
-                        case 1217:  // ER_ROW_IS_REFERENCED (older)
-                        case 1048:  // ER_BAD_NULL_ERROR (NOT NULL constraint)
-                            category = ErrorCategory::Constraint;
-                            break;
-                        case 1142:  // ER_TABLEACCESS_DENIED_ERROR
-                        case 1143:  // ER_COLUMNACCESS_DENIED_ERROR
-                        case 1044:  // ER_DBACCESS_DENIED_ERROR
-                            category = ErrorCategory::Permissions;
-                            break;
-                        case 1205:  // ER_LOCK_WAIT_TIMEOUT
-                        case 1213:  // ER_LOCK_DEADLOCK
-                            category = ErrorCategory::Resource;
-                            break;
-                        case 1406:  // ER_DATA_TOO_LONG
-                        case 1366:  // ER_TRUNCATED_WRONG_VALUE_FOR_FIELD
-                        case 1292:  // ER_TRUNCATED_WRONG_VALUE
-                            category = ErrorCategory::DataRelated;
-                            break;
-                        case 1054:  // ER_BAD_FIELD_ERROR
-                            category = ErrorCategory::Syntax;
-                            break;
-                        case 1146:  // ER_NO_SUCH_TABLE
-                            category = ErrorCategory::Syntax;
-                            break;
-                        default:
-                            if (transportError.native_mysql_errno > 0 && transportError.native_mysql_errno < CR_MIN_ERROR) {  // Server errors are typically < CR_MIN_ERROR
-                                category = ErrorCategory::DatabaseInternal;
-                            } else if (transportError.native_mysql_errno >= CR_MIN_ERROR) {  // Client errors
-                                category = ErrorCategory::Connectivity;                      // Or DriverInternal for some client errors
-                            } else {
-                                category = ErrorCategory::Syntax;  // Default for general query errors
-                            }
-                    }
-                    break;
-                case ::cpporm_mysql_transport::MySqlTransportError::Category::DataError:
-                    category = ErrorCategory::DataRelated;
-                    break;
-                case ::cpporm_mysql_transport::MySqlTransportError::Category::ResourceError:
-                    category = ErrorCategory::Resource;
-                    break;
-                case ::cpporm_mysql_transport::MySqlTransportError::Category::TransactionError:
-                    category = ErrorCategory::Transaction;
-                    break;
-                case ::cpporm_mysql_transport::MySqlTransportError::Category::ProtocolError:
-                    category = ErrorCategory::DriverInternal;
-                    driver_text = "Protocol Layer: " + transportError.message;
-                    break;
-                case ::cpporm_mysql_transport::MySqlTransportError::Category::InternalError:
-                    category = ErrorCategory::DriverInternal;
-                    driver_text = "Transport Internal: " + transportError.message;
-                    break;
-                case ::cpporm_mysql_transport::MySqlTransportError::Category::ApiUsageError:
-                    category = ErrorCategory::DriverInternal;
-                    driver_text = "Transport API Usage: " + transportError.message;
-                    break;
-                default:
-                    category = ErrorCategory::Unknown;
+            // Basic properties from transportMeta
+            field.setLength(static_cast<int>(transportMeta.length));       // MySQL length might be bigger
+            field.setPrecision(static_cast<int>(transportMeta.decimals));  // For numeric types, decimals is precision for MySQL
+                                                                           // Scale would be part of decimals if it's like DECIMAL(P,S)
+                                                                           // For simplicity, using decimals as precision.
+                                                                           // A more detailed parsing of original type string is needed for true P,S.
+            field.setRequiredStatus(transportMeta.isNotNull() ? RequiredStatus::Required : RequiredStatus::Optional);
+            field.setAutoValue(transportMeta.isAutoIncrement());
+            field.setPrimaryKeyPart(transportMeta.isPrimaryKey());
+            // transportMeta doesn't directly tell if it's FK, read-only, or generated in a simple way.
+            // These might need more complex schema introspection or be set based on convention/hints.
+
+            // Set original database type name if available from transportMeta's parsing of type string
+            // (Assuming MySqlTransportFieldMeta might store the full original type string if needed)
+            // For now, we derive a generic SqlValueType. SqlField's databaseTypeName could be set
+            // if MySqlTransportFieldMeta retained the raw type string.
+
+            // Example for default value (if transportMeta.default_value is MySqlNativeValue)
+            if (!transportMeta.default_value.is_null()) {
+                field.setDefaultValue(mySqlNativeValueToSqlValue(transportMeta.default_value));  // Assuming this helper exists
             }
 
-            return SqlError(category, db_text, driver_text, transportError.native_mysql_sqlstate, transportError.native_mysql_errno, transportError.failed_query);
+            // Set flags in SqlField based on transportMeta.flags
+            // (This is a bit redundant if SqlField properties are set directly,
+            //  but good for completeness if SqlField has its own internal flag system)
+
+            return field;
         }
 
-        SqlError protocolErrorToSqlError(const mysql_protocol::MySqlProtocolError& protocolError, const std::string& context_message) {
-            ErrorCategory category = ErrorCategory::DriverInternal;
-            std::string combined_message = context_message;
-            if (!combined_message.empty() && !protocolError.error_message.empty()) {
-                combined_message += " - ";
+        // --- Implementation for metasToSqlRecord ---
+        SqlRecord metasToSqlRecord(const std::vector<::cpporm_mysql_transport::MySqlTransportFieldMeta>& transportMetas) {
+            SqlRecord record;
+            for (const auto& tm : transportMetas) {
+                record.append(metaToSqlField(tm));
             }
-            combined_message += protocolError.error_message;
+            return record;
+        }
 
-            unsigned int pe_code = protocolError.error_code;
+        // --- Implementation for metaToSqlIndex ---
+        SqlIndex metaToSqlIndex(const ::cpporm_mysql_transport::MySqlTransportIndexInfo& transportIndexInfo) {
+            SqlIndex index(transportIndexInfo.indexName, transportIndexInfo.tableName);
+            index.setUnique(!transportIndexInfo.isNonUnique);
+            index.setPrimaryKey(transportIndexInfo.indexName == "PRIMARY");  // MySQL convention
+            index.setTypeMethod(transportIndexInfo.indexType);
 
-            if (pe_code == mysql_protocol::InternalErrc::SUCCESS) {
-                category = ErrorCategory::NoError;
-            } else if (pe_code >= mysql_protocol::InternalErrc::CONVERSION_INVALID_INPUT_ARGUMENT && pe_code <= mysql_protocol::InternalErrc::CONVERSION_TYPE_MISMATCH_ACCESS) {
-                category = ErrorCategory::DataRelated;
-            } else if (pe_code >= mysql_protocol::InternalErrc::TIME_STRING_PARSE_EMPTY_INPUT && pe_code <= mysql_protocol::InternalErrc::TIME_CHRONO_CONVERSION_UNSUPPORTED_TYPE) {
-                category = ErrorCategory::DataRelated;
-            } else if (pe_code >= mysql_protocol::InternalErrc::BIND_SETUP_NULL_POINTER_ARGUMENT && pe_code < mysql_protocol::InternalErrc::NATIVE_VALUE_TO_STRING_ERROR) {
-                category = ErrorCategory::DriverInternal;
-            } else if (pe_code == mysql_protocol::InternalErrc::NATIVE_VALUE_TO_STRING_ERROR) {
-                category = ErrorCategory::DataRelated;
-            } else if (pe_code == mysql_protocol::InternalErrc::LOGIC_ERROR_INVALID_STATE) {
-                category = ErrorCategory::DriverInternal;
+            for (const auto& tCol : transportIndexInfo.columns) {
+                IndexColumnDefinition colDef;
+                colDef.fieldName = tCol.columnName;
+                // MySQL SHOW INDEX doesn't directly give ASC/DESC for columns, typically ASC
+                colDef.sortOrder = IndexSortOrder::Default;  // Or Ascending
+                if (tCol.expression.has_value()) {
+                    colDef.expression = tCol.expression;
+                    index.setFunctional(true);
+                }
+                // Other properties like opClass, subPart, collation can be mapped if needed
+                index.appendColumn(colDef);
             }
-            // else other InternalErrc can be mapped as needed
+            // transportIndexInfo.comment and indexComment can be stored if SqlIndex supports them.
+            return index;
+        }
 
-            return SqlError(category, protocolError.error_message, combined_message, std::string(protocolError.sql_state), static_cast<int>(pe_code), "");
+        // --- Implementation for metasToSqlIndexes ---
+        std::vector<SqlIndex> metasToSqlIndexes(const std::vector<::cpporm_mysql_transport::MySqlTransportIndexInfo>& transportIndexInfos) {
+            std::vector<SqlIndex> indexes;
+            indexes.reserve(transportIndexInfos.size());
+            for (const auto& ti : transportIndexInfos) {
+                indexes.push_back(metaToSqlIndex(ti));
+            }
+            return indexes;
         }
 
     }  // namespace mysql_helper
