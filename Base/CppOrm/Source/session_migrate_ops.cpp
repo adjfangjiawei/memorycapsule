@@ -1,33 +1,24 @@
-// Base/CppOrm/Source/session_migrate_ops.cpp
-#include "cpporm/model_base.h"
-// #include "cpporm/qt_db_manager.h" // Replaced
 #include <QDebug>
-
-#include "cpporm/db_manager.h"  // Use new DbManager
-#include "cpporm/query_builder.h"
-#include "cpporm/session.h"
-#include "cpporm/session_migrate_priv.h"
-// #include <QSqlDriver> // Replaced by cpporm_sqldriver features
-// #include <QSqlError> // Replaced by cpporm_sqldriver::SqlError
-// #include <QSqlQuery> // Replaced by cpporm_sqldriver::SqlQuery
-// #include <QSqlRecord> // Replaced by cpporm_sqldriver::SqlRecord
 #include <algorithm>
 #include <set>
 
-// Include cpporm_sqldriver types
+#include "cpporm/db_manager.h"
+#include "cpporm/model_base.h"
+#include "cpporm/query_builder.h"
+#include "cpporm/session.h"
+#include "cpporm/session_migrate_priv.h"
 #include "sqldriver/sql_database.h"
 
 namespace cpporm {
 
     Error Session::AutoMigrate(const ModelMeta &meta) {
-        // db_handle_ is now cpporm_sqldriver::SqlDatabase
         if (!db_handle_.isOpen()) {
-            if (!db_handle_.open()) {                                     // SqlDatabase::open()
-                cpporm_sqldriver::SqlError err = db_handle_.lastError();  // SqlDatabase::lastError()
+            if (!db_handle_.open()) {
+                cpporm_sqldriver::SqlError err = db_handle_.lastError();
                 return Error(ErrorCode::ConnectionNotOpen,
                              "Cannot AutoMigrate: Database connection is not open and "
                              "failed to open: " +
-                                 err.text());  // SqlError::text()
+                                 err.text());
             }
         }
         if (meta.table_name.empty()) {
@@ -35,7 +26,6 @@ namespace cpporm {
         }
         qInfo() << "AutoMigrate: Starting migration for table '" << QString::fromStdString(meta.table_name) << "'...";
 
-        // SqlDatabase::driverName() returns std::string
         QString driverNameUpper = QString::fromStdString(db_handle_.driverName()).toUpper();
 
         Error table_err = internal::migrateCreateTable(*this, meta, driverNameUpper);

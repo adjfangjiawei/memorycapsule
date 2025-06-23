@@ -4,6 +4,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <type_traits>  // 为 std::underlying_type_t 新增
 #include <vector>
 
 #include "cpporm/model_base_class.h"
@@ -12,11 +13,7 @@
 namespace cpporm {
 
     using FieldMetaProvider = std::function<FieldMeta()>;
-    // Renamed from AssociationMetaConfigurator to be more specific
-    // This provider now returns a partially filled AssociationMeta (without
-    // target_model_type) and the TargetTypeIndexProvider separately.
     using PendingAssociationProvider = std::function<AssociationMeta()>;
-
     using IndexDefinitionProvider = std::function<IndexDefinition()>;
 
     template <typename Derived>
@@ -24,12 +21,10 @@ namespace cpporm {
       public:
         inline static ModelMeta _shared_meta_instance;
         inline static std::vector<FieldMetaProvider> *_pending_field_meta_providers = nullptr;
-        // Changed type for pending associations
         inline static std::vector<PendingAssociationProvider> *_pending_association_providers = nullptr;
         inline static std::vector<IndexDefinitionProvider> *_pending_index_definition_providers = nullptr;
         inline static std::mutex _meta_init_mutex;
 
-        // New static function to get type_index of Derived
         static std::type_index _get_static_type_index() {
             return typeid(Derived);
         }
@@ -89,12 +84,10 @@ namespace cpporm {
                 Model<Derived>::_pending_field_meta_providers = nullptr;
             }
 
-            // Process pending associations
             if (Model<Derived>::_pending_association_providers) {
                 for (const auto &provider_func : *Model<Derived>::_pending_association_providers) {
                     if (provider_func) {
                         AssociationMeta assoc_meta_obj = provider_func();
-                        // Now, resolve the target_model_type using the provider function
                         if (assoc_meta_obj.target_type_index_provider) {
                             assoc_meta_obj.target_model_type = assoc_meta_obj.target_type_index_provider();
                         } else {
@@ -162,6 +155,34 @@ namespace cpporm {
                 throw;
             } catch (const std::exception &e) {
                 qWarning() << "cpporm Model::generated_setter: Exception for type " << typeid(FieldType).name() << ": " << e.what();
+                throw;
+            }
+        }
+
+        // ***** 新增: 为 enum class 字段专用的 getter 和 setter 模板方法 *****
+        template <typename EnumCppType, typename UnderlyingType, EnumCppType Derived::*MemberPtr>
+        static std::any _cpporm_generated_enum_getter(const void *obj_ptr) {
+            const Derived *model_instance = static_cast<const Derived *>(obj_ptr);
+            // 获取 enum 成员的值，并将其转换为底层整数类型后存入 std::any
+            return static_cast<UnderlyingType>(model_instance->*MemberPtr);
+        }
+
+        template <typename EnumCppType, typename UnderlyingType, EnumCppType Derived::*MemberPtr>
+        static void _cpporm_generated_enum_setter(void *obj_ptr, const std::any &value) {
+            try {
+                Derived *model_instance = static_cast<Derived *>(obj_ptr);
+                if (value.has_value()) {
+                    // 从 std::any 中取出整数值，并转换回 enum class 类型
+                    model_instance->*MemberPtr = static_cast<EnumCppType>(std::any_cast<UnderlyingType>(value));
+                } else {
+                    // 如果值为空，则将 enum 成员设置为其默认值
+                    model_instance->*MemberPtr = EnumCppType{};
+                }
+            } catch (const std::bad_any_cast &e) {
+                qWarning() << "cpporm Model::generated_enum_setter: Bad_any_cast for underlying type" << typeid(UnderlyingType).name() << "from value of type" << (value.has_value() ? value.type().name() : "empty_any") << ". Details:" << e.what();
+                throw;
+            } catch (const std::exception &e) {
+                qWarning() << "cpporm Model::generated_enum_setter: Exception for type" << typeid(EnumCppType).name() << ":" << e.what();
                 throw;
             }
         }

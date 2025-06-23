@@ -1,4 +1,3 @@
-// Base/CppOrm/Source/session_static_utils.cpp
 #include <QDebug>
 #include <QMetaType>
 #include <QVariant>
@@ -17,9 +16,29 @@ namespace cpporm {
 
     std::string Session::getSqlTypeForCppType(const FieldMeta &field_meta, const QString &driverName_upper_qstr) {
         std::string driverName_upper = driverName_upper_qstr.toStdString();
+
+        // ***** 新增逻辑: 优先处理 IsEnum 标志 *****
+        if (has_flag(field_meta.flags, FieldFlag::IsEnum)) {
+            // 如果提供了具体的 DB 类型提示 (例如 "ENUM('a','b')")，则直接使用它
+            if (!field_meta.db_type_hint.empty()) {
+                std::string hint_upper = field_meta.db_type_hint;
+                std::transform(hint_upper.begin(), hint_upper.end(), hint_upper.begin(), [](unsigned char c) {
+                    return std::toupper(c);
+                });
+                // 这是一个简单的检查，可以根据需要扩展
+                if (hint_upper.rfind("ENUM", 0) == 0) {
+                    return field_meta.db_type_hint;
+                }
+            }
+            // 如果没有 ENUM 提示，则根据其底层整数类型回退到标准整数映射
+            // 注意：因为 cpporm_FIELD_ENUM 宏将 C++ 类型记录为底层类型，
+            // 所以我们不需要在这里做任何特殊处理，代码会自然地进入下面的整数类型判断。
+        }
+
         if (!field_meta.db_type_hint.empty()) {
             return field_meta.db_type_hint;
         }
+
         const std::type_index &cpp_type = field_meta.cpp_type;
 
         if (cpp_type == typeid(int)) return "INT";
@@ -27,7 +46,7 @@ namespace cpporm {
             if (driverName_upper == "QPSQL" || driverName_upper == "QSQLITE") return "INTEGER";
             return "INT UNSIGNED";
         }
-        if (cpp_type == typeid(int64_t)) return "BIGINT";  // FIX: was long long
+        if (cpp_type == typeid(int64_t)) return "BIGINT";
         if (cpp_type == typeid(unsigned long long)) {
             if (driverName_upper == "QPSQL" || driverName_upper == "QSQLITE") return "BIGINT";
             return "BIGINT UNSIGNED";
@@ -57,6 +76,7 @@ namespace cpporm {
         return "TEXT";
     }
 
+    // ... (文件中的其他函数 qvariantToAny, anyToQueryValueForSessionConvenience, queryValueToSqlValue, sqlValueToQueryValue, execute_query_internal 保持不变)
     void Session::qvariantToAny(const QVariant &qv, const std::type_index &target_cpp_type, std::any &out_any, bool &out_conversion_ok) {
         out_conversion_ok = false;
         out_any.reset();
@@ -73,7 +93,7 @@ namespace cpporm {
         }
         if (target_cpp_type == typeid(int)) {
             out_any = qv.toInt(&out_conversion_ok);
-        } else if (target_cpp_type == typeid(int64_t)) {  // FIX: was long long
+        } else if (target_cpp_type == typeid(int64_t)) {
             out_any = qv.toLongLong(&out_conversion_ok);
         } else if (target_cpp_type == typeid(unsigned int)) {
             out_any = qv.toUInt(&out_conversion_ok);
@@ -94,12 +114,10 @@ namespace cpporm {
 #else
                 qv.type() == QVariant::UserType  // Check if it's a user type (often pointers or gadgets in Qt 5)
 #endif
-                // Add more specific checks if needed for custom types stored in QVariant
             ) {
                 qWarning() << "Session::qvariantToAny: Attempting to convert a complex QVariant type" << qv.typeName() << "to std::string. This might not be meaningful.";
-                // Fallback or specific handling if you know how to stringify it
-                out_any = qv.toString().toStdString();  // Fallback to QVariant::toString()
-                out_conversion_ok = true;               // Assume QVariant::toString() is always "successful"
+                out_any = qv.toString().toStdString();
+                out_conversion_ok = true;
             } else if (qv.canConvert<QString>()) {
                 out_any = qv.toString().toStdString();
                 out_conversion_ok = true;
@@ -150,7 +168,7 @@ namespace cpporm {
         if (!val.has_value()) return nullptr;
         const auto &type = val.type();
         if (type == typeid(int)) return std::any_cast<int>(val);
-        if (type == typeid(int64_t)) return static_cast<long long>(std::any_cast<int64_t>(val));  // FIX: was long long, ensure cast to variant type
+        if (type == typeid(int64_t)) return static_cast<long long>(std::any_cast<int64_t>(val));
         if (type == typeid(double)) return std::any_cast<double>(val);
         if (type == typeid(std::string)) return std::any_cast<std::string>(val);
         if (type == typeid(bool)) return std::any_cast<bool>(val);
@@ -293,5 +311,4 @@ namespace cpporm {
         }
         return std::make_pair(std::move(query), make_ok());
     }
-
 }  // namespace cpporm

@@ -31,11 +31,13 @@ void runCrudOperations(cpporm::Session& session) {
     user1.name = "Alice Wonderland";
     user1.age = 30;
     user1.email = "alice.wonderland@example.com";
+    user1.status = UserStatus::Active;  // 设置 enum class 字段
 
     User user2;
     user2.name = "Bob The Builder";
     user2.age = 45;
     user2.email = "bob.builder@example.com";
+    user2.status = UserStatus::Pending;  // 设置 enum class 字段
 
     auto create_res1 = session.Create(user1);
     if (create_res1) {
@@ -58,6 +60,7 @@ void runCrudOperations(cpporm::Session& session) {
     user3_dup_email.name = "Charlie Chaplin";
     user3_dup_email.age = 50;
     user3_dup_email.email = "alice.wonderland@example.com";
+    user3_dup_email.status = UserStatus::Inactive;
     auto create_res3 = session.Create(user3_dup_email);
     if (create_res3) {
         qWarning() << "Unexpected: Created user3 with duplicate email. ID:" << user3_dup_email.id;
@@ -68,34 +71,26 @@ void runCrudOperations(cpporm::Session& session) {
         }
     }
 
-    qDebug() << "\n2. Reading user with ID:" << user1.id;
-    User foundUser1;
-    cpporm::Error err = session.First(&foundUser1, user1.id);
+    qDebug() << "\n2. Reading all active users...";
+    std::vector<User> active_users;
+    cpporm::Error err = session.Model<User>().Where("status = ?", {UserStatus::Active}).Find(&active_users);
     if (!err) {
-        qDebug() << "Found user by ID:";
-        foundUser1.print();
+        qDebug() << "Found" << active_users.size() << "active user(s):";
+        for (const auto& u : active_users) {
+            u.print();
+        }
     } else {
-        qCritical() << "Failed to find user by ID " << user1.id << ":" << QString::fromStdString(err.toString());
+        qCritical() << "Failed to find active users:" << QString::fromStdString(err.toString());
     }
 
-    qDebug() << "\nReading user with name 'Bob The Builder':";
-    User foundUserBob;
-    err = session.Model<User>().Where("name = ?", {"Bob The Builder"}).First(&foundUserBob);
-    if (!err) {
-        qDebug() << "Found user by name:";
-        foundUserBob.print();
-    } else {
-        qWarning() << "Failed to find user by name 'Bob The Builder':" << QString::fromStdString(err.toString());
-    }
-
-    qDebug() << "\n3. Updating Alice's age...";
-    if (foundUser1.id > 0) {
-        foundUser1.age = 31;
-        auto save_res = session.Save(foundUser1);
+    qDebug() << "\n3. Updating Alice's status to Inactive...";
+    if (user1.id > 0) {
+        user1.status = UserStatus::Inactive;
+        auto save_res = session.Save(user1);
         if (save_res) {
             qDebug() << "Alice updated. Affected rows/status:" << save_res.value();
             User updatedAlice;
-            if (!session.First(&updatedAlice, foundUser1.id)) {
+            if (!session.First(&updatedAlice, user1.id)) {
                 qDebug() << "Alice after update:";
                 updatedAlice.print();
             } else {
@@ -106,15 +101,7 @@ void runCrudOperations(cpporm::Session& session) {
         }
     }
 
-    qDebug() << "\nUpdating age for users older than 40...";
-    auto update_res = session.Model<User>().Where("age > ?", {40}).Updates({{"age", 55}});
-    if (update_res) {
-        qDebug() << "Mass update completed. Rows affected:" << update_res.value();
-    } else {
-        qWarning() << "Mass update failed:" << QString::fromStdString(update_res.error().toString());
-    }
-
-    qDebug() << "\n4. Finding all users...";
+    qDebug() << "\n4. Finding all users (to see changes)...";
     std::vector<User> allUsers;
     err = session.Find(&allUsers);
     if (!err) {
@@ -126,41 +113,14 @@ void runCrudOperations(cpporm::Session& session) {
         qCritical() << "Failed to find all users:" << QString::fromStdString(err.toString());
     }
 
-    qDebug() << "\nFinding users with age 55 (using unique_ptr)...";
-    std::vector<std::unique_ptr<User>> usersAge55;
-    err = session.Model<User>().Where("age = ?", {55}).Find(&usersAge55);
-    if (!err) {
-        qDebug() << "Found" << usersAge55.size() << "users with age 55:";
-        for (const auto& user_ptr : usersAge55) {
-            if (user_ptr) user_ptr->print();
-        }
-    } else {
-        qWarning() << "Failed to find users with age 55:" << QString::fromStdString(err.toString());
-    }
-
-    qDebug() << "\n5. Deleting Bob (original ID: " << user2.id << ", current model may be different after updates)...";
-    User bobForDelete;
-    cpporm::Error findBobErr = session.Model<User>().Where("email = ?", {"bob.builder@example.com"}).First(&bobForDelete);
-
-    if (!findBobErr && bobForDelete.id > 0) {
-        qDebug() << "Found Bob for deletion, ID: " << bobForDelete.id;
-        auto delete_res = session.Delete(bobForDelete);
+    qDebug() << "\n5. Deleting Bob...";
+    if (user2.id > 0) {
+        auto delete_res = session.Delete(user2);
         if (delete_res) {
             qDebug() << "Bob deleted. Rows affected:" << delete_res.value();
         } else {
             qCritical() << "Failed to delete Bob:" << QString::fromStdString(delete_res.error().toString());
         }
-        User deletedBobCheck;
-        err = session.First(&deletedBobCheck, bobForDelete.id);
-        if (err && err.code == cpporm::ErrorCode::RecordNotFound) {
-            qInfo() << "Bob (ID: " << bobForDelete.id << ") correctly not found after deletion.";
-        } else if (!err) {
-            qWarning() << "Unexpected: Bob (ID: " << bobForDelete.id << ") found after attempting deletion.";
-        } else {
-            qWarning() << "Error checking for Bob after deletion:" << QString::fromStdString(err.toString());
-        }
-    } else {
-        qWarning() << "Could not find Bob by email for deletion. Original ID was" << user2.id << ". Error:" << QString::fromStdString(findBobErr.toString());
     }
 
     qDebug() << "\n6. Counting remaining users...";
@@ -187,6 +147,7 @@ void runTransactionExample(cpporm::Session& main_session) {
     user_tx1.name = "Tx User One";
     user_tx1.age = 70;
     user_tx1.email = "tx.user.one@example.com";
+    user_tx1.status = UserStatus::Active;  // Also set status in tx example
 
     auto create_tx1_res = tx_session->Create(user_tx1);
     if (!create_tx1_res) {
@@ -222,7 +183,6 @@ void runTransactionExample(cpporm::Session& main_session) {
         }
     }
 
-    // Now, main_session should still be usable as it shares the ISqlDriver.
     User check_tx_user;
     cpporm::Error err_tx_check = main_session.Model<User>().Where("id = ?", {user_tx1.id}).First(&check_tx_user);
     if (simulate_error) {
@@ -275,22 +235,24 @@ int main(int argc, char* argv[]) {
         qDebug() << "AutoMigration for User model completed.";
     }
 
-    runCrudOperations(session);
-    runTransactionExample(session);  // Original session should remain usable
+    // Clean up before running to ensure a fresh state
+    session.Model<User>().Where("1=1").Delete();
+    qDebug() << "Cleaned up User table before test run.";
 
-    // if (session.getDbHandle().isOpen()) {
-    //     qDebug() << "\n--- Cleaning up ---";
-    //     auto cleanup_res = session.Model<User>().Where("1=1").Delete();
-    //     if (cleanup_res) {
-    //         qDebug() << "Cleaned up users table. Rows affected:" << cleanup_res.value();
-    //     } else {
-    //         qWarning() << "Failed to clean up users table:" << QString::fromStdString(cleanup_res.error().toString());
-    //     }
-    // } else {
-    //     qCritical() << "Main session db_handle is no longer open after transaction example. Cleanup cannot proceed.";
-    //     // This indicates a problem if the shared_ptr logic didn't work as expected,
-    //     // or if a transaction error caused the underlying connection to close.
-    // }
+    runCrudOperations(session);
+    runTransactionExample(session);  // Run the transaction example
+
+    if (session.getDbHandle().isOpen()) {
+        qDebug() << "\n--- Final Cleanup ---";
+        auto cleanup_res = session.Model<User>().Where("1=1").Delete();
+        if (cleanup_res) {
+            qDebug() << "Cleaned up users table. Rows affected:" << cleanup_res.value();
+        } else {
+            qWarning() << "Failed to clean up users table:" << QString::fromStdString(cleanup_res.error().toString());
+        }
+    } else {
+        qCritical() << "Main session db_handle is no longer open after transaction example. Cleanup cannot proceed.";
+    }
 
     qDebug() << "Database connection" << QString::fromStdString(session.getConnectionName()) << " will be closed when session goes out of scope.";
     qDebug() << "CppOrm MySQL Example Finished.";

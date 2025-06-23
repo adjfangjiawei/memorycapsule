@@ -9,7 +9,20 @@ namespace cpporm {
     enum class AssociationType { None, HasOne, BelongsTo, HasMany, ManyToMany };
 
     // --- Field Flags ---
-    enum class FieldFlag : uint32_t { None = 0, PrimaryKey = 1 << 0, AutoIncrement = 1 << 1, NotNull = 1 << 2, Unique = 1 << 3, HasDefault = 1 << 4, Indexed = 1 << 5, CreatedAt = 1 << 6, UpdatedAt = 1 << 7, DeletedAt = 1 << 8, Association = 1 << 9 };
+    enum class FieldFlag : uint32_t {
+        None = 0,
+        PrimaryKey = 1 << 0,
+        AutoIncrement = 1 << 1,
+        NotNull = 1 << 2,
+        Unique = 1 << 3,
+        HasDefault = 1 << 4,
+        Indexed = 1 << 5,
+        CreatedAt = 1 << 6,
+        UpdatedAt = 1 << 7,
+        DeletedAt = 1 << 8,
+        Association = 1 << 9,
+        IsEnum = 1 << 10  // 新增 IsEnum 标志
+    };
 
     inline FieldFlag operator|(FieldFlag a, FieldFlag b) {
         return static_cast<FieldFlag>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));

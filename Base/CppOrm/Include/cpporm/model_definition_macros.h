@@ -1,3 +1,4 @@
+// clang-format off
 #ifndef cpporm_MODEL_DEFINITION_MACROS_H
 #define cpporm_MODEL_DEFINITION_MACROS_H
 
@@ -7,6 +8,7 @@
 #include <memory>  // For std::shared_ptr
 #include <sstream>
 #include <string>
+#include <type_traits> // For std::underlying_type_t
 #include <typeindex>
 #include <vector>
 
@@ -92,6 +94,24 @@ namespace cpporm {
                                                                                                                                                                                                                                                          \
   public:
 
+// ***** 修正后的 cpporm_FIELD_ENUM 宏 *****
+#define cpporm_FIELD_ENUM(CppEnumType, CppName, DbNameStr, DbTypeHintStr, ...)                                                                                                                                                                                                                 \
+  public:                                                                                                                                                                                                                                                                                          \
+    CppEnumType CppName{};                                                                                                                                                                                                                                                                         \
+                                                                                                                                                                                                                                                                                                   \
+  private:                                                                                                                                                                                                                                                                                         \
+    inline static const bool cpporm_CONCAT(_fe_prov_reg_, CppName) = (cpporm::Model<_cppormThisModelClass>::_addPendingFieldMetaProvider([]() -> cpporm::FieldMeta {                                                                                                                              \
+                                                                         using CppUnderlyingType = std::underlying_type_t<CppEnumType>;                                                                                                                                                            \
+                                                                         /* 调用新的模板化 getter/setter */                                                                                                                                      \
+                                                                         auto g = &cpporm::Model<_cppormThisModelClass>::template _cpporm_generated_enum_getter<CppEnumType, CppUnderlyingType, &_cppormThisModelClass::CppName>;                         \
+                                                                         auto s = &cpporm::Model<_cppormThisModelClass>::template _cpporm_generated_enum_setter<CppEnumType, CppUnderlyingType, &_cppormThisModelClass::CppName>;                         \
+                                                                         /* 在元数据中，将 C++ 类型记录为底层整数类型，并添加 IsEnum 标志 */                                                                                                             \
+                                                                         return cpporm::FieldMeta(DbNameStr, cpporm_STRINGIFY(CppName), typeid(CppUnderlyingType), DbTypeHintStr, cpporm::combine_flags_recursive(cpporm::FieldFlag::IsEnum, ##__VA_ARGS__), g, s); \
+                                                                     }),                                                                                                                                                                               \
+                                                                     true);                                                                                                                                                                            \
+                                                                                                                                                                                                                                                       \
+  public:
+
 #undef cpporm_ASSOCIATION_FIELD
 #define cpporm_ASSOCIATION_FIELD(ContainerCppType, CppName)                                                                                                                                                             \
   public:                                                                                                                                                                                                               \
@@ -105,13 +125,11 @@ namespace cpporm {
                                                                                                                                                                                                                         \
   public:
 
-// Association macros now pass a TargetTypeIndexProvider
 #define cpporm_HAS_MANY(CppFieldName, AssocModelParamName, FKOnAssoc, ...)                                                                                                                                                                                                  \
   private:                                                                                                                                                                                                                                                                  \
     inline static const bool cpporm_CONCAT(_assoc_m_prov_reg_hm_, CppFieldName) = (cpporm::Model<_cppormThisModelClass>::_addPendingAssociationProvider([]() -> cpporm::AssociationMeta {                                                                                   \
                                                                                        auto d_setter_vec = &cpporm::Model<_cppormThisModelClass>::template _cpporm_generated_association_vector_setter<AssocModelParamName, &_cppormThisModelClass::CppFieldName>;          \
                                                                                        std::string current_model_ref_key = cpporm::internal::get_optional_arg_str<1>("", ##__VA_ARGS__);                                                                                    \
-                                                                                       /* Create the provider function for target_model_type */                                                                                                                             \
                                                                                        cpporm::TargetTypeIndexProvider target_type_provider = &cpporm::Model<AssocModelParamName>::_get_static_type_index;                                                                  \
                                                                                        return cpporm::AssociationMeta(cpporm_STRINGIFY(CppFieldName), cpporm::AssociationType::HasMany, target_type_provider, FKOnAssoc, current_model_ref_key, "", d_setter_vec, nullptr); \
                                                                                    }),                                                                                                                                                                                      \

@@ -47,6 +47,10 @@ namespace cpporm {
 #endif
                 return nullptr;
             }
+            // ***** 新增分支来处理 enum class *****
+        } else if constexpr (std::is_enum_v<DecayedArg>) {
+            // 将 enum class 转换为其底层整数类型
+            return static_cast<std::underlying_type_t<DecayedArg>>(std::forward<Arg>(arg));
         } else if constexpr (std::is_constructible_v<QueryValue, DecayedArg>) {
             return QueryValue(std::forward<Arg>(arg));  // Explicit construction for QueryValue
         } else {
