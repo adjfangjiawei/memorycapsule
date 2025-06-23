@@ -1,4 +1,3 @@
-// Example/main_cpporm_mysql_example.cpp
 #include <QCoreApplication>
 #include <QDebug>
 #include <iostream>
@@ -81,7 +80,7 @@ void runCrudOperations(cpporm::Session& session) {
 
     qDebug() << "\nReading user with name 'Bob The Builder':";
     User foundUserBob;
-    err = session.Model<User>().Where("name = ?", {cpporm::QueryValue(std::string("Bob The Builder"))}).First(&foundUserBob);
+    err = session.Model<User>().Where("name = ?", {"Bob The Builder"}).First(&foundUserBob);
     if (!err) {
         qDebug() << "Found user by name:";
         foundUserBob.print();
@@ -108,7 +107,7 @@ void runCrudOperations(cpporm::Session& session) {
     }
 
     qDebug() << "\nUpdating age for users older than 40...";
-    auto update_res = session.Model<User>().Where("age > ?", {40}).Updates({{"age", cpporm::QueryValue(55)}});
+    auto update_res = session.Model<User>().Where("age > ?", {40}).Updates({{"age", 55}});
     if (update_res) {
         qDebug() << "Mass update completed. Rows affected:" << update_res.value();
     } else {
@@ -141,25 +140,25 @@ void runCrudOperations(cpporm::Session& session) {
 
     qDebug() << "\n5. Deleting Bob (original ID: " << user2.id << ", current model may be different after updates)...";
     User bobForDelete;
-    cpporm::Error findBobErr = session.Model<User>().Where("email = ?", {cpporm::QueryValue(std::string("bob.builder@example.com"))}).First(&bobForDelete);
+    cpporm::Error findBobErr = session.Model<User>().Where("email = ?", {"bob.builder@example.com"}).First(&bobForDelete);
 
     if (!findBobErr && bobForDelete.id > 0) {
         qDebug() << "Found Bob for deletion, ID: " << bobForDelete.id;
-        // auto delete_res = session.Delete(bobForDelete);
-        // if (delete_res) {
-        //     qDebug() << "Bob deleted. Rows affected:" << delete_res.value();
-        // } else {
-        //     qCritical() << "Failed to delete Bob:" << QString::fromStdString(delete_res.error().toString());
-        // }
-        // User deletedBobCheck;
-        // err = session.First(&deletedBobCheck, bobForDelete.id);
-        // if (err && err.code == cpporm::ErrorCode::RecordNotFound) {
-        //     qInfo() << "Bob (ID: " << bobForDelete.id << ") correctly not found after deletion.";
-        // } else if (!err) {
-        //     qWarning() << "Unexpected: Bob (ID: " << bobForDelete.id << ") found after attempting deletion.";
-        // } else {
-        //     qWarning() << "Error checking for Bob after deletion:" << QString::fromStdString(err.toString());
-        // }
+        auto delete_res = session.Delete(bobForDelete);
+        if (delete_res) {
+            qDebug() << "Bob deleted. Rows affected:" << delete_res.value();
+        } else {
+            qCritical() << "Failed to delete Bob:" << QString::fromStdString(delete_res.error().toString());
+        }
+        User deletedBobCheck;
+        err = session.First(&deletedBobCheck, bobForDelete.id);
+        if (err && err.code == cpporm::ErrorCode::RecordNotFound) {
+            qInfo() << "Bob (ID: " << bobForDelete.id << ") correctly not found after deletion.";
+        } else if (!err) {
+            qWarning() << "Unexpected: Bob (ID: " << bobForDelete.id << ") found after attempting deletion.";
+        } else {
+            qWarning() << "Error checking for Bob after deletion:" << QString::fromStdString(err.toString());
+        }
     } else {
         qWarning() << "Could not find Bob by email for deletion. Original ID was" << user2.id << ". Error:" << QString::fromStdString(findBobErr.toString());
     }

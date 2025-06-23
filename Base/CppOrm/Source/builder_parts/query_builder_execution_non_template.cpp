@@ -88,7 +88,7 @@ namespace cpporm {
         return executor_->FindImpl(*this, results_vector, element_type_factory);
     }
 
-    // Create 返回 std::expected<SqlValue, Error>
+    // FIX: Changed return type from QVariant to SqlValue
     std::expected<cpporm_sqldriver::SqlValue, Error> QueryBuilder::Create(ModelBase &model, const OnConflictClause *conflict_options_override) {
         if (!executor_) return std::unexpected(Error(ErrorCode::InternalError, "QueryBuilder has no executor."));
 

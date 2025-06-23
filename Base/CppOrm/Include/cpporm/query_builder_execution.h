@@ -1,4 +1,4 @@
-// cpporm/query_builder_execution.h
+// CppOrm/Include/cpporm/query_builder_execution.h
 #ifndef cpporm_QUERY_BUILDER_EXECUTION_H
 #define cpporm_QUERY_BUILDER_EXECUTION_H
 
@@ -146,6 +146,7 @@ namespace cpporm {
         return this->Find(results_vector);
     }
 
+    // FIX: Changed return type from QVariant to SqlValue
     template <typename TModel>
     inline std::expected<cpporm_sqldriver::SqlValue, Error> QueryBuilder::Create(TModel &model) {
         static_assert(std::is_base_of<ModelBase, TModel>::value, "TModel must be a descendant of cpporm::ModelBase");

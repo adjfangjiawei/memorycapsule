@@ -1,3 +1,4 @@
+// CppOrm/Include/cpporm/query_builder_core.h
 #ifndef cpporm_QUERY_BUILDER_CORE_H
 #define cpporm_QUERY_BUILDER_CORE_H
 
@@ -216,7 +217,7 @@ namespace cpporm {
         template <typename T>
         Error Find(std::vector<std::unique_ptr<T>> *results_vector, const std::string &query_string, const std::vector<QueryValue> &args = {});
 
-        // Create 返回类型与 IQueryExecutor::CreateImpl 保持一致
+        // FIX: Changed return type from QVariant to SqlValue
         template <typename TModel>
         std::expected<cpporm_sqldriver::SqlValue, Error> Create(TModel &model);
 
@@ -226,7 +227,7 @@ namespace cpporm {
         // 非模板化执行方法 (声明)
         Error First(ModelBase &result_model);
         Error Find(std::vector<std::unique_ptr<ModelBase>> &results_vector, std::function<std::unique_ptr<ModelBase>()> element_type_factory);
-        // Create 返回类型与 IQueryExecutor::CreateImpl 保持一致
+        // FIX: Changed return type from QVariant to SqlValue
         std::expected<cpporm_sqldriver::SqlValue, Error> Create(ModelBase &model, const OnConflictClause *conflict_options_override = nullptr);
         std::expected<long long, Error> Updates(const std::map<std::string, QueryValue> &updates);
         std::expected<long long, Error> Delete();
