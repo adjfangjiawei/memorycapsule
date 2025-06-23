@@ -41,7 +41,7 @@ namespace cpporm {
                 } else {
                     if (pk_cpp_type == typeid(int))
                         pk_any_val = id_sql_val_ret.toInt32(&conv_ok);
-                    else if (pk_cpp_type == typeid(long long))
+                    else if (pk_cpp_type == typeid(int64_t))  // FIX: was long long
                         pk_any_val = id_sql_val_ret.toInt64(&conv_ok);
                     else if (pk_cpp_type == typeid(unsigned int))
                         pk_any_val = id_sql_val_ret.toUInt32(&conv_ok);
@@ -93,7 +93,7 @@ namespace cpporm {
                 else if (first_id_sql_val.type() == cpporm_sqldriver::SqlValueType::Int64 && first_id_sql_val.toInt64(&conv_check_ok) == 0 && conv_check_ok)
                     is_zero_id = true;
 
-                if (!is_zero_id || (is_zero_id && pk_cpp_type != typeid(int) && pk_cpp_type != typeid(long long))) {
+                if (!is_zero_id || (is_zero_id && pk_cpp_type != typeid(int) && pk_cpp_type != typeid(int64_t))) {
                     qWarning() << "backfillIdsFromLastInsertId: lastInsertId is invalid, null, or zero (and PK is not int/longlong) for table " << QString::fromStdString(meta.table_name) << ". Value: " << QString::fromStdString(first_id_sql_val.toString());
                     return successfully_backfilled_models;
                 }
@@ -123,7 +123,7 @@ namespace cpporm {
                     bool conv_ok = false;
                     if (pk_cpp_type == typeid(int))
                         pk_any_val = first_id_sql_val.toInt32(&conv_ok);
-                    else if (pk_cpp_type == typeid(long long))
+                    else if (pk_cpp_type == typeid(int64_t))  // FIX: was long long
                         pk_any_val = first_id_sql_val.toInt64(&conv_ok);
                     else if (pk_cpp_type == typeid(unsigned int))
                         pk_any_val = first_id_sql_val.toUInt32(&conv_ok);
@@ -170,7 +170,7 @@ namespace cpporm {
 
                         if (pk_cpp_type == typeid(int))
                             pk_any_val_seq = current_id_sv.toInt32(&conv_ok_seq);
-                        else if (pk_cpp_type == typeid(long long))
+                        else if (pk_cpp_type == typeid(int64_t))  // FIX: was long long
                             pk_any_val_seq = current_id_sv.toInt64(&conv_ok_seq);
                         else if (pk_cpp_type == typeid(unsigned int))
                             pk_any_val_seq = current_id_sv.toUInt32(&conv_ok_seq);
@@ -206,9 +206,9 @@ namespace cpporm {
                         bool conv_ok = false;
                         if (pk_cpp_type == typeid(int))
                             pk_any_val = first_id_sql_val.toInt32(&conv_ok);
-                        else if (pk_cpp_type == typeid(long long))
+                        else if (pk_cpp_type == typeid(int64_t)) {  // FIX: was long long
                             pk_any_val = first_id_sql_val.toInt64(&conv_ok);
-                        else {
+                        } else {
                             pk_any_val = first_id_sql_val.toString(&conv_ok);
                         }
                         if (conv_ok) {
@@ -234,7 +234,7 @@ namespace cpporm {
                     bool conv_ok = false;
                     if (pk_cpp_type == typeid(int))
                         pk_any_val = first_id_sql_val.toInt32(&conv_ok);
-                    else if (pk_cpp_type == typeid(long long))
+                    else if (pk_cpp_type == typeid(int64_t))  // FIX: was long long
                         pk_any_val = first_id_sql_val.toInt64(&conv_ok);
                     else {
                         pk_any_val = first_id_sql_val.toString(&conv_ok);

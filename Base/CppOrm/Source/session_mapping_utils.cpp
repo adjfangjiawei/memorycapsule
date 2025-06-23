@@ -1,7 +1,7 @@
-#include <QDateTime>  // For timestamp logic, QVariant types in QueryValue
-#include <QDebug>     // qWarning, qInfo
-#include <QMetaType>  // For QVariant -> std::any conversion types
-#include <QVariant>   // Still used for std::any <-> QueryValue <-> SqlValue intermediate if needed
+// Base/CppOrm/Source/session_mapping_utils.cpp
+#include <QDateTime>  // For timestamp logic, QVariant in QueryValue
+#include <QDebug>     // qWarning
+#include <QVariant>   // QVariantList for suffix bindings if buildInsertSQLSuffix still uses it
 
 #include "cpporm/model_base.h"
 #include "cpporm/query_builder.h"
@@ -118,8 +118,8 @@ namespace cpporm {
                 const auto &type = val_any.type();
                 if (type == typeid(int))
                     sql_val_to_write = cpporm_sqldriver::SqlValue(static_cast<int32_t>(std::any_cast<int>(val_any)));
-                else if (type == typeid(long long))
-                    sql_val_to_write = cpporm_sqldriver::SqlValue(static_cast<int64_t>(std::any_cast<long long>(val_any)));
+                else if (type == typeid(int64_t))  // FIX: Changed from long long to int64_t
+                    sql_val_to_write = cpporm_sqldriver::SqlValue(std::any_cast<int64_t>(val_any));
                 else if (type == typeid(unsigned int))
                     sql_val_to_write = cpporm_sqldriver::SqlValue(static_cast<uint32_t>(std::any_cast<unsigned int>(val_any)));
                 else if (type == typeid(unsigned long long))

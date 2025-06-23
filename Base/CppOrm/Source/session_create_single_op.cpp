@@ -1,3 +1,4 @@
+// Base/CppOrm/Source/session_create_single_op.cpp
 #include <QDateTime>  // For timestamp logic, QVariant in QueryValue
 #include <QDebug>     // qWarning
 #include <QVariant>   // QVariantList for suffix bindings if buildInsertSQLSuffix still uses it
