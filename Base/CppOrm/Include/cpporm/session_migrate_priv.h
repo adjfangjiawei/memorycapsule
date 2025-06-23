@@ -8,8 +8,7 @@
 #include <vector>
 
 #include "cpporm/error.h"
-#include "cpporm/model_base.h"  // For ModelMeta
-// Removed algorithm and cctype, will be in the .cpp file with definition
+#include "cpporm/model_base.h"
 
 namespace cpporm_sqldriver {
     class SqlDatabase;
@@ -30,8 +29,9 @@ namespace cpporm {
             std::string default_value;
             std::string character_set_name;
             std::string collation_name;
-            std::string column_key;  // e.g., "PRI", "UNI", "MUL"
-            std::string extra;       // e.g., "auto_increment"
+            std::string column_key;
+            std::string extra;
+            std::string comment;  // ***** 新增 comment 成员 *****
         };
 
         struct DbIndexInfo {
@@ -42,21 +42,16 @@ namespace cpporm {
             std::string type_method;
         };
 
-        // Declaration of normalizeDbType
         std::string normalizeDbType(const std::string &db_type_raw, const QString &driverNameUpperQ);
-
-        // Declarations for functions in migrate_table_ops.cpp, migrate_column_ops.cpp, migrate_index_ops.cpp
         Error migrateCreateTable(Session &session, const ModelMeta &meta, const QString &driverNameUpper);
         std::map<std::string, DbColumnInfo> getTableColumnsInfo(Session &session, const QString &tableNameQString, const QString &driverNameUpper);
         Error migrateModifyColumns(Session &session, const ModelMeta &meta, const QString &driverNameUpper);
         std::map<std::string, DbIndexInfo> getTableIndexesInfo(Session &session, const QString &tableNameQString, const QString &driverNameUpper);
         Error migrateManageIndexes(Session &session, const ModelMeta &meta, const QString &driverNameUpper);
         bool areIndexDefinitionsEquivalent(const DbIndexInfo &db_idx, const IndexDefinition &model_idx_def, const QString &driverNameUpper);
-
-        // Helper for executing DDL - already public static on Session, but good to have a consistent way if needed privately
         std::pair<cpporm_sqldriver::SqlQuery, Error> execute_ddl_query(cpporm_sqldriver::SqlDatabase &db, const std::string &ddl_sql_std);
 
     }  // namespace internal
 }  // namespace cpporm
 
-#endif  // cpporm_SESSION_MIGRATE_PRIV_H
+#endif

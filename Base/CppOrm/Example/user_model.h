@@ -1,31 +1,26 @@
 #pragma once
 
 #include <QDateTime>
-#include <QDebug>  // For print() method
+#include <QDebug>
 
 #include "cpporm/model_base.h"
 #include "cpporm/model_definition_macros.h"
 
-// 1. 定义一个示例 enum class
-// 显式指定底层类型是个好习惯，便于数据库映射
 enum class UserStatus : int { Pending = 0, Active = 1, Inactive = 2 };
 
 class User : public cpporm::Model<User> {
     cpporm_DEFINE_MODEL_CLASS_NAME(User);
 
   public:
+    // 为了兼容新的宏，PRIMARY_KEY 也需要一个空的 comment 占位符
+    // (或者我们可以为 PRIMARY_KEY 创建一个不带注释的重载，但为了简单，这里直接加空字符串)
     cpporm_AUTO_INCREMENT_PRIMARY_KEY(int64_t, id, "id");
 
-    cpporm_FIELD_TYPE(std::string, name, "name", "VARCHAR(255)");
-    cpporm_FIELD_TYPE(int, age, "age", "INT");
-    cpporm_FIELD_TYPE(std::string, email, "email", "VARCHAR(255)");
-
-    // 2. 使用新的宏来定义 enum class 字段
-    // 第一个参数是 enum class 类型
-    // 第二个参数是 C++ 成员名
-    // 第三个参数是数据库列名
-    // 第四个参数是数据库类型提示（对于 TINYINT、INT 等非常重要）
-    cpporm_FIELD_ENUM(UserStatus, status, "status", "TINYINT");
+    // ***** 使用更新后的宏，第五个参数是注释 *****
+    cpporm_FIELD_TYPE(std::string, name, "name", "VARCHAR(255)", "User's full name");
+    cpporm_FIELD_TYPE(int, age, "age", "INT", "User's age");
+    cpporm_FIELD_TYPE(std::string, email, "email", "VARCHAR(255)", "User's unique email address");
+    cpporm_FIELD_ENUM(UserStatus, status, "status", "TINYINT", "User account status (0: Pending, 1: Active, 2: Inactive)");
 
     cpporm_TIMESTAMPS(QDateTime);
     cpporm_SOFT_DELETE(QDateTime);
@@ -54,7 +49,6 @@ class User : public cpporm::Model<User> {
     }
 
     cpporm_MODEL_BEGIN(User, "users");
-    // cpporm_UNIQUE_INDEX("uix_users_email", "email");
-    cpporm_INDEX("idx_users_name_age", "name", "age");
-    cpporm_MODEL_END()
+    cpporm_UNIQUE_INDEX("uix_users_email", "email");
+    cpporm_INDEX("idx_users_name_age", "name", "age") cpporm_MODEL_END()
 };

@@ -1,11 +1,12 @@
 // Base/CppOrm/Source/session_migrate_table_ops.cpp
 #include <QDebug>
 #include <QString>
-#include <mutex>  // For model factory registry lock
+#include <mutex>
 
 #include "cpporm/query_builder.h"
 #include "cpporm/session.h"
-#include "cpporm/session_migrate_priv.h"  // Contains declarations
+#include "cpporm/session_migrate_priv.h"
+#include "sqldriver/i_sql_driver.h"  // ***** 新增: 包含 ISqlDriver 接口 *****
 #include "sqldriver/sql_database.h"
 #include "sqldriver/sql_error.h"
 #include "sqldriver/sql_query.h"
@@ -19,10 +20,10 @@ namespace cpporm {
             }
 
             std::vector<std::string> column_definitions_sql;
-            std::vector<std::string> pk_col_db_names_for_table_constraint;  // Renamed for clarity
+            std::vector<std::string> pk_col_db_names_for_table_constraint;
             std::vector<std::string> table_constraints_sql;
 
-            for (const auto &field : meta.fields) {  // Loop variable is 'field'
+            for (const auto &field : meta.fields) {
                 if (has_flag(field.flags, FieldFlag::Association) || field.db_name.empty()) {
                     continue;
                 }
@@ -30,17 +31,12 @@ namespace cpporm {
                 std::string col_def_str = QueryBuilder::quoteSqlIdentifier(field.db_name);
                 std::string field_sql_type = Session::getSqlTypeForCppType(field, driverNameUpper);
 
-                // Special handling for SQLite INTEGER PRIMARY KEY AUTOINCREMENT
-                if (driverNameUpper == "QSQLITE" && has_flag(field.flags, FieldFlag::PrimaryKey) && has_flag(field.flags, FieldFlag::AutoIncrement) && (field.cpp_type == typeid(int) || field.cpp_type == typeid(long long))) {
-                    // For SQLite, "INTEGER PRIMARY KEY AUTOINCREMENT" is a column definition.
-                    // Ensure getSqlTypeForCppType returns "INTEGER" and we add the rest.
-                    if (field_sql_type == "INTEGER") {  // Assuming getSqlType returns base type
+                if (driverNameUpper == "QSQLITE" && has_flag(field.flags, FieldFlag::PrimaryKey) && has_flag(field.flags, FieldFlag::AutoIncrement) && (field.cpp_type == typeid(int) || field.cpp_type == typeid(int64_t))) {
+                    if (field_sql_type == "INTEGER") {
                         field_sql_type += " PRIMARY KEY AUTOINCREMENT";
                     } else {
                         qWarning() << "migrateCreateTable: SQLite AUTOINCREMENT PK '" << QString::fromStdString(field.db_name) << "' is not INTEGER type. AUTOINCREMENT keyword might not apply as expected.";
                     }
-                    // This column now defines its own PK, so don't add to table-level PK constraint later
-                    // if it's the only PK. If composite, table constraint is still needed but this col is already PK.
                 } else {
                     if (has_flag(field.flags, FieldFlag::PrimaryKey)) {
                         pk_col_db_names_for_table_constraint.push_back(field.db_name);
@@ -49,20 +45,17 @@ namespace cpporm {
 
                 col_def_str += " " + field_sql_type;
 
-                if ((driverNameUpper == "MYSQL" || driverNameUpper == "MARIADB" || driverNameUpper == "QMYSQL" || driverNameUpper == "QMARIADB") && has_flag(field.flags, FieldFlag::AutoIncrement) && field_sql_type.find("AUTO_INCREMENT") == std::string::npos &&  // Check if already added by type
-                    col_def_str.find("AUTO_INCREMENT") == std::string::npos) {  // Check if already added to col_def_str
+                if ((driverNameUpper == "MYSQL" || driverNameUpper == "MARIADB" || driverNameUpper == "QMYSQL" || driverNameUpper == "QMARIADB") && has_flag(field.flags, FieldFlag::AutoIncrement) && field_sql_type.find("AUTO_INCREMENT") == std::string::npos &&
+                    col_def_str.find("AUTO_INCREMENT") == std::string::npos) {
                     col_def_str += " AUTO_INCREMENT";
                 }
 
-                // NOT NULL constraint (unless already part of PRIMARY KEY for some DBs, but usually separate)
                 if (has_flag(field.flags, FieldFlag::NotNull)) {
-                    // Avoid redundant "NOT NULL" if type string implies it (e.g., from "INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL")
                     if (field_sql_type.find("NOT NULL") == std::string::npos && col_def_str.find("NOT NULL") == std::string::npos) {
                         col_def_str += " NOT NULL";
                     }
                 }
 
-                // UNIQUE constraint for non-primary key columns (handled by column def or explicit index)
                 if (has_flag(field.flags, FieldFlag::Unique) && !has_flag(field.flags, FieldFlag::PrimaryKey)) {
                     bool part_of_model_unique_index = false;
                     for (const auto &idx_def : meta.indexes) {
@@ -75,10 +68,19 @@ namespace cpporm {
                         col_def_str += " UNIQUE";
                     }
                 }
+
+                // ***** 修复: 调用 driver() 上的 escapeString *****
+                if (!field.comment.empty() && (driverNameUpper == "MYSQL" || driverNameUpper == "MARIADB" || driverNameUpper == "QMYSQL" || driverNameUpper == "QMARIADB")) {
+                    if (session.getDbHandle().driver()) {
+                        std::string escaped_comment = session.getDbHandle().driver()->escapeString(field.comment);
+                        col_def_str += " COMMENT '" + escaped_comment + "'";
+                    }
+                }
+
                 column_definitions_sql.push_back(col_def_str);
             }
-
-            // Add table-level PRIMARY KEY constraint if not handled by column def (e.g., composite PKs, or non-SQLite single PKs)
+            // ... (其余部分不变)
+            // ... the rest of the function remains the same ...
             if (!pk_col_db_names_for_table_constraint.empty()) {
                 bool sqlite_single_int_pk_handled_by_col = false;
                 if (driverNameUpper == "QSQLITE" && pk_col_db_names_for_table_constraint.size() == 1) {
@@ -86,7 +88,6 @@ namespace cpporm {
                     if (pk_field && has_flag(pk_field->flags, FieldFlag::AutoIncrement) && (Session::getSqlTypeForCppType(*pk_field, driverNameUpper).find("PRIMARY KEY AUTOINCREMENT") != std::string::npos)) {
                         sqlite_single_int_pk_handled_by_col = true;
                     } else if (pk_field && (Session::getSqlTypeForCppType(*pk_field, driverNameUpper).find("PRIMARY KEY") != std::string::npos)) {
-                        // If type already included "PRIMARY KEY" (e.g. from modified getSqlTypeForCppType for SQLite)
                         sqlite_single_int_pk_handled_by_col = true;
                     }
                 }
@@ -166,19 +167,5 @@ namespace cpporm {
             auto [_, err_obj] = execute_ddl_query(session.getDbHandle(), create_table_ddl_std);
             return err_obj;
         }
-
-        // execute_ddl_query is correctly defined here or in session_migrate_priv.h/utils
-        // ... (execute_ddl_query definition as before) ...
-        std::pair<cpporm_sqldriver::SqlQuery, Error> execute_ddl_query(cpporm_sqldriver::SqlDatabase &db, const std::string &ddl_sql_std) {
-            if (!db.isOpen()) {
-                if (!db.open()) {
-                    cpporm_sqldriver::SqlError err = db.lastError();
-                    qWarning() << "execute_ddl_query: Failed to open database for DDL:" << QString::fromStdString(err.text()) << "SQL:" << QString::fromStdString(ddl_sql_std);
-                    return std::make_pair(cpporm_sqldriver::SqlQuery(db), Error(ErrorCode::ConnectionNotOpen, "Failed to open database for DDL: " + err.text(), err.nativeErrorCodeNumeric()));
-                }
-            }
-            return Session::execute_query_internal(db, ddl_sql_std, {});
-        }
-
     }  // namespace internal
 }  // namespace cpporm

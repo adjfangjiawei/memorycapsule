@@ -31,8 +31,6 @@ namespace cpporm {
         std::string cpp_field_name;
         AssociationType type = AssociationType::None;
 
-        // Store the provider function instead of the type_index directly at
-        // registration
         TargetTypeIndexProvider target_type_index_provider;
         std::type_index target_model_type;  // To be filled during finalization
 
@@ -46,7 +44,7 @@ namespace cpporm {
 
         AssociationMeta(std::string fieldName,
                         AssociationType assocType,
-                        TargetTypeIndexProvider targetTypeProvider,  // Changed parameter
+                        TargetTypeIndexProvider targetTypeProvider,
                         std::string fkDbName,
                         std::string currentModelRefKeyDbName = "",
                         std::string targetModelReferencedKeyDbName = "",
@@ -55,7 +53,7 @@ namespace cpporm {
             : cpp_field_name(std::move(fieldName)),
               type(assocType),
               target_type_index_provider(std::move(targetTypeProvider)),
-              target_model_type(typeid(void)),  // Initialize to a dummy value
+              target_model_type(typeid(void)),
               foreign_key_db_name(std::move(fkDbName)),
               primary_key_db_name_on_current_model(std::move(currentModelRefKeyDbName)),
               target_model_pk_db_name(std::move(targetModelReferencedKeyDbName)),
@@ -70,14 +68,29 @@ namespace cpporm {
         std::string cpp_name;
         std::type_index cpp_type;
         std::string db_type_hint;
+        std::string comment;  // ***** 新增 comment 成员 *****
         FieldFlag flags = FieldFlag::None;
         std::any default_value;
 
         std::function<std::any(const void *)> getter;
         std::function<void(void *, const std::any &)> setter;
 
-        FieldMeta(std::string dbName, std::string cppName, std::type_index cppType, std::string dbTypeHint = "", FieldFlag fieldFlags = FieldFlag::None, std::function<std::any(const void *)> g = nullptr, std::function<void(void *, const std::any &)> s = nullptr)
-            : db_name(std::move(dbName)), cpp_name(std::move(cppName)), cpp_type(cppType), db_type_hint(std::move(dbTypeHint)), flags(fieldFlags), getter(std::move(g)), setter(std::move(s)) {
+        FieldMeta(std::string dbName,
+                  std::string cppName,
+                  std::type_index cppType,
+                  std::string dbTypeHint = "",
+                  std::string fieldComment = "",  // ***** 新增构造函数参数 *****
+                  FieldFlag fieldFlags = FieldFlag::None,
+                  std::function<std::any(const void *)> g = nullptr,
+                  std::function<void(void *, const std::any &)> s = nullptr)
+            : db_name(std::move(dbName)),
+              cpp_name(std::move(cppName)),
+              cpp_type(cppType),
+              db_type_hint(std::move(dbTypeHint)),
+              comment(std::move(fieldComment)),  // ***** 初始化 comment 成员 *****
+              flags(fieldFlags),
+              getter(std::move(g)),
+              setter(std::move(s)) {
         }
     };
 

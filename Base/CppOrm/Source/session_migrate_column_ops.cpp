@@ -1,3 +1,4 @@
+// Base/CppOrm/Source/session_migrate_column_ops.cpp
 #include <QDebug>
 #include <QString>
 #include <algorithm>
@@ -5,7 +6,8 @@
 
 #include "cpporm/query_builder.h"
 #include "cpporm/session.h"
-#include "cpporm/session_migrate_priv.h"  // Should contain normalizeDbType declaration
+#include "cpporm/session_migrate_priv.h"
+#include "sqldriver/i_sql_driver.h"  // ***** 新增: 包含 ISqlDriver 接口 *****
 #include "sqldriver/sql_database.h"
 #include "sqldriver/sql_field.h"
 #include "sqldriver/sql_query.h"
@@ -14,8 +16,8 @@
 
 namespace cpporm {
     namespace internal {
-
-        // 查询数据库以获取表的当前列信息
+        // ... (getTableColumnsInfo a在这里保持不变，因为它已经在上次的提交中被正确修改以填充 comment) ...
+        // ... getTableColumnsInfo implementation remains the same as in previous correct submission ...
         std::map<std::string, DbColumnInfo> getTableColumnsInfo(Session &session, const QString &tableNameQString, const QString &driverNameUpper) {
             std::map<std::string, DbColumnInfo> columns;
             cpporm_sqldriver::SqlQuery query(session.getDbHandle());
@@ -39,12 +41,14 @@ namespace cpporm {
                 }
             } else if (driverNameUpper == "QPSQL" || driverNameUpper == "POSTGRESQL") {
                 sql_std =
-                    "SELECT column_name, data_type, udt_name, is_nullable, "
-                    "column_default, "
-                    "character_maximum_length, numeric_precision, numeric_scale, "
-                    "collation_name "
-                    "FROM information_schema.columns WHERE table_schema = "
-                    "current_schema() AND table_name = '" +
+                    "SELECT c.column_name, c.data_type, c.udt_name, c.is_nullable, "
+                    "c.column_default, "
+                    "c.character_maximum_length, c.numeric_precision, c.numeric_scale, "
+                    "c.collation_name, pgd.description AS column_comment "
+                    "FROM information_schema.columns c "
+                    "LEFT JOIN pg_catalog.pg_statio_all_tables AS st ON (st.relname = c.table_name) "
+                    "LEFT JOIN pg_catalog.pg_description pgd ON (pgd.objoid = st.relid AND pgd.objsubid = c.ordinal_position) "
+                    "WHERE c.table_schema = current_schema() AND c.table_name = '" +
                     tableNameStd + "';";
                 if (!query.exec(sql_std)) {
                     qWarning() << "getTableColumnsInfo (PostgreSQL): Failed to query information_schema.columns for table" << tableNameQString << ":" << QString::fromStdString(query.lastError().text()) << "SQL:" << QString::fromStdString(sql_std);
@@ -67,7 +71,6 @@ namespace cpporm {
                     colInfo.column_key = query.value(rec_meta.indexOf("pk")).toInt32() > 0 ? "PRI" : "";
                 } else if (driverNameUpper == "MYSQL" || driverNameUpper == "MARIADB" || driverNameUpper == "QMYSQL" || driverNameUpper == "QMARIADB") {
                     colInfo.name = query.value(rec_meta.indexOf("Field")).toString();
-                    // FIX: Handle case where 'Type' column is returned as binary/bytes
                     cpporm_sqldriver::SqlValue type_val = query.value(rec_meta.indexOf("Type"));
                     if (type_val.type() == cpporm_sqldriver::SqlValueType::ByteArray) {
                         std::vector<unsigned char> bytes = type_val.toStdVectorUChar();
@@ -83,6 +86,7 @@ namespace cpporm {
                     colInfo.collation_name = query.value(rec_meta.indexOf("Collation")).toString();
                     colInfo.column_key = query.value(rec_meta.indexOf("Key")).toString();
                     colInfo.extra = query.value(rec_meta.indexOf("Extra")).toString();
+                    colInfo.comment = query.value(rec_meta.indexOf("Comment")).toString();
                 } else if (driverNameUpper == "QPSQL" || driverNameUpper == "POSTGRESQL") {
                     colInfo.name = query.value(rec_meta.indexOf("column_name")).toString();
                     std::string pg_udt_name = query.value(rec_meta.indexOf("udt_name")).toString();
@@ -102,6 +106,7 @@ namespace cpporm {
                     colInfo.is_nullable = (nullable_str_pg == "YES");
                     colInfo.default_value = query.value(rec_meta.indexOf("column_default")).toString();
                     colInfo.collation_name = query.value(rec_meta.indexOf("collation_name")).toString();
+                    colInfo.comment = query.value(rec_meta.indexOf("column_comment")).toString();
                 }
                 if (!colInfo.name.empty()) {
                     colInfo.normalized_type = normalizeDbType(colInfo.type, driverNameUpper);
@@ -115,10 +120,6 @@ namespace cpporm {
             qInfo() << "migrateModifyColumns: Checking columns for table '" << QString::fromStdString(meta.table_name) << "'...";
             std::map<std::string, DbColumnInfo> existing_db_columns = getTableColumnsInfo(session, QString::fromStdString(meta.table_name), driverNameUpper);
 
-            if (existing_db_columns.empty() && (driverNameUpper == "MYSQL" || driverNameUpper == "MARIADB" || driverNameUpper == "QMYSQL" || driverNameUpper == "QMARIADB")) {
-                qWarning() << "migrateModifyColumns: getTableColumnsInfo returned no columns for table '" << QString::fromStdString(meta.table_name) << "' with driver '" << driverNameUpper << "'. Assuming columns need to be added or table was just created if this is the first run.";
-            }
-
             for (const auto &model_field : meta.fields) {
                 if (has_flag(model_field.flags, FieldFlag::Association) || model_field.db_name.empty()) {
                     continue;
@@ -129,31 +130,33 @@ namespace cpporm {
 
                 auto it_db_col = existing_db_columns.find(model_field.db_name);
                 if (it_db_col == existing_db_columns.end()) {
+                    // ... (ADD COLUMN logic remains the same as in previous submission, with corrected escapeString call)
                     qInfo() << "migrateModifyColumns: Column '" << QString::fromStdString(model_field.db_name) << "' not found in existing DB schema for table '" << QString::fromStdString(meta.table_name) << "'. Attempting to ADD.";
-
                     std::string add_col_sql_str = "ALTER TABLE " + QueryBuilder::quoteSqlIdentifier(meta.table_name) + " ADD COLUMN " + QueryBuilder::quoteSqlIdentifier(model_field.db_name) + " " + model_sql_type_str;
-
-                    if (has_flag(model_field.flags, FieldFlag::NotNull)) {
-                        add_col_sql_str += " NOT NULL";
-                    }
-
-                    if (has_flag(model_field.flags, FieldFlag::Unique) && !has_flag(model_field.flags, FieldFlag::PrimaryKey)) {
-                        add_col_sql_str += " UNIQUE";
-                    }
-                    if ((driverNameUpper == "MYSQL" || driverNameUpper == "MARIADB" || driverNameUpper == "QMYSQL" || driverNameUpper == "QMARIADB") && has_flag(model_field.flags, FieldFlag::AutoIncrement) && model_sql_type_str.find("AUTO_INCREMENT") == std::string::npos) {
+                    if (has_flag(model_field.flags, FieldFlag::NotNull)) add_col_sql_str += " NOT NULL";
+                    if (has_flag(model_field.flags, FieldFlag::Unique) && !has_flag(model_field.flags, FieldFlag::PrimaryKey)) add_col_sql_str += " UNIQUE";
+                    if ((driverNameUpper == "MYSQL" || driverNameUpper == "MARIADB" || driverNameUpper == "QMYSQL" || driverNameUpper == "QMARIADB") && has_flag(model_field.flags, FieldFlag::AutoIncrement) && model_sql_type_str.find("AUTO_INCREMENT") == std::string::npos)
                         add_col_sql_str += " AUTO_INCREMENT";
+                    if (!model_field.comment.empty() && (driverNameUpper == "MYSQL" || driverNameUpper == "MARIADB" || driverNameUpper == "QMYSQL" || driverNameUpper == "QMARIADB")) {
+                        if (session.getDbHandle().driver()) add_col_sql_str += " COMMENT '" + session.getDbHandle().driver()->escapeString(model_field.comment) + "'";
                     }
                     add_col_sql_str += ";";
-
                     qInfo() << "migrateModifyColumns (ADD DDL): " << QString::fromStdString(add_col_sql_str);
                     auto [_, add_err] = execute_ddl_query(session.getDbHandle(), add_col_sql_str);
-                    if (add_err) {
+                    if (add_err)
                         qWarning() << "migrateModifyColumns: Failed to ADD column '" << QString::fromStdString(model_field.db_name) << "': " << QString::fromStdString(add_err.toString());
+                    else if (!model_field.comment.empty() && (driverNameUpper == "QPSQL" || driverNameUpper == "POSTGRESQL")) {
+                        if (session.getDbHandle().driver()) {
+                            std::string pg_comment_sql = "COMMENT ON COLUMN " + QueryBuilder::quoteSqlIdentifier(meta.table_name) + "." + QueryBuilder::quoteSqlIdentifier(model_field.db_name) + " IS '" + session.getDbHandle().driver()->escapeString(model_field.comment) + "';";
+                            qInfo() << "migrateModifyColumns (PG COMMENT DDL): " << QString::fromStdString(pg_comment_sql);
+                            execute_ddl_query(session.getDbHandle(), pg_comment_sql);
+                        }
                     }
-                } else {  // Column exists, check for modifications
+                } else {
                     DbColumnInfo &db_col = it_db_col->second;
                     bool needs_alter_type = false;
                     bool needs_alter_notnull = false;
+                    bool needs_alter_comment = false;
 
                     if (model_normalized_sql_type != db_col.normalized_type) {
                         needs_alter_type = true;
@@ -171,25 +174,29 @@ namespace cpporm {
                         needs_alter_notnull = true;
                     }
 
-                    if (needs_alter_type || needs_alter_notnull) {
-                        qInfo() << "migrateModifyColumns: Mismatch or desired change for column '" << QString::fromStdString(model_field.db_name) << "'. DB type: '" << QString::fromStdString(db_col.type) << "' (norm: " << QString::fromStdString(db_col.normalized_type)
-                                << "), is_nullable:" << db_col.is_nullable << ". Model type: '" << QString::fromStdString(model_sql_type_str) << "' (norm: " << QString::fromStdString(model_normalized_sql_type) << "), not_null:" << model_is_not_null << ". Attempting to MODIFY.";
+                    if (model_field.comment != db_col.comment) {
+                        needs_alter_comment = true;
+                    }
 
-                        std::string alter_col_sql_str_main;
+                    if (needs_alter_type || needs_alter_notnull || needs_alter_comment) {
+                        qInfo() << "migrateModifyColumns: Mismatch or desired change for column '" << QString::fromStdString(model_field.db_name) << "'. DB type: '" << QString::fromStdString(db_col.type) << "', nullable:" << db_col.is_nullable << ", comment: '"
+                                << QString::fromStdString(db_col.comment) << "'. Model type: '" << QString::fromStdString(model_sql_type_str) << "', not_null:" << model_is_not_null << ", comment: '" << QString::fromStdString(model_field.comment) << "'. Attempting to MODIFY.";
+
                         if (driverNameUpper == "MYSQL" || driverNameUpper == "MARIADB" || driverNameUpper == "QMYSQL" || driverNameUpper == "QMARIADB") {
-                            alter_col_sql_str_main = "ALTER TABLE " + QueryBuilder::quoteSqlIdentifier(meta.table_name) + " MODIFY COLUMN " + QueryBuilder::quoteSqlIdentifier(model_field.db_name) + " " + model_sql_type_str;
-
-                            // 如果是主键，则强制为 NOT NULL
-                            if (model_is_not_null || has_flag(model_field.flags, FieldFlag::PrimaryKey)) {
+                            std::string alter_col_sql_str_main = "ALTER TABLE " + QueryBuilder::quoteSqlIdentifier(meta.table_name) + " MODIFY COLUMN " + QueryBuilder::quoteSqlIdentifier(model_field.db_name) + " " + model_sql_type_str;
+                            if (model_is_not_null || has_flag(model_field.flags, FieldFlag::PrimaryKey))
                                 alter_col_sql_str_main += " NOT NULL";
-                            } else {
+                            else
                                 alter_col_sql_str_main += " NULL";
-                            }
-
-                            if (has_flag(model_field.flags, FieldFlag::AutoIncrement) && model_sql_type_str.find("AUTO_INCREMENT") == std::string::npos) {
-                                alter_col_sql_str_main += " AUTO_INCREMENT";
+                            if (has_flag(model_field.flags, FieldFlag::AutoIncrement) && model_sql_type_str.find("AUTO_INCREMENT") == std::string::npos) alter_col_sql_str_main += " AUTO_INCREMENT";
+                            if (!model_field.comment.empty()) {
+                                if (session.getDbHandle().driver()) alter_col_sql_str_main += " COMMENT '" + session.getDbHandle().driver()->escapeString(model_field.comment) + "'";
                             }
                             alter_col_sql_str_main += ";";
+
+                            qInfo() << "migrateModifyColumns (MODIFY DDL): " << QString::fromStdString(alter_col_sql_str_main);
+                            auto [_, alter_err] = execute_ddl_query(session.getDbHandle(), alter_col_sql_str_main);
+                            if (alter_err) qWarning() << "migrateModifyColumns: Failed to MODIFY column '" << QString::fromStdString(model_field.db_name) << "': " << QString::fromStdString(alter_err.toString());
                         } else if (driverNameUpper == "QPSQL" || driverNameUpper == "POSTGRESQL") {
                             if (needs_alter_type) {
                                 std::string alter_type_sql = "ALTER TABLE " + QueryBuilder::quoteSqlIdentifier(meta.table_name) + " ALTER COLUMN " + QueryBuilder::quoteSqlIdentifier(model_field.db_name) + " TYPE " + model_sql_type_str + ";";
@@ -203,21 +210,17 @@ namespace cpporm {
                                 auto [_, alter_null_err] = execute_ddl_query(session.getDbHandle(), alter_null_sql);
                                 if (alter_null_err) qWarning() << "migrateModifyColumns: Failed to MODIFY PG column NULLABILITY for '" << QString::fromStdString(model_field.db_name) << "': " << QString::fromStdString(alter_null_err.toString());
                             }
-                            continue;
+                            if (needs_alter_comment) {
+                                if (session.getDbHandle().driver()) {
+                                    std::string pg_comment_sql = "COMMENT ON COLUMN " + QueryBuilder::quoteSqlIdentifier(meta.table_name) + "." + QueryBuilder::quoteSqlIdentifier(model_field.db_name) + " IS '" + session.getDbHandle().driver()->escapeString(model_field.comment) + "';";
+                                    qInfo() << "migrateModifyColumns (PG COMMENT DDL): " << QString::fromStdString(pg_comment_sql);
+                                    execute_ddl_query(session.getDbHandle(), pg_comment_sql);
+                                }
+                            }
                         } else if (driverNameUpper == "QSQLITE") {
-                            qWarning() << "migrateModifyColumns: SQLite has very limited ALTER TABLE support for modifying columns. Change for '" << QString::fromStdString(model_field.db_name) << "' skipped.";
-                            continue;
+                            qWarning() << "migrateModifyColumns: SQLite has very limited ALTER TABLE support. Change for '" << QString::fromStdString(model_field.db_name) << "' skipped.";
                         } else {
                             qWarning() << "migrateModifyColumns: Don't know how to alter column for driver " << driverNameUpper << ". Column '" << QString::fromStdString(model_field.db_name) << "' alteration skipped.";
-                            continue;
-                        }
-
-                        if (!alter_col_sql_str_main.empty()) {
-                            qInfo() << "migrateModifyColumns (MODIFY DDL): " << QString::fromStdString(alter_col_sql_str_main);
-                            auto [_, alter_err] = execute_ddl_query(session.getDbHandle(), alter_col_sql_str_main);
-                            if (alter_err) {
-                                qWarning() << "migrateModifyColumns: Failed to MODIFY column '" << QString::fromStdString(model_field.db_name) << "': " << QString::fromStdString(alter_err.toString());
-                            }
                         }
                     }
                 }

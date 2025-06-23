@@ -6,10 +6,9 @@
 #include <vector>
 
 #include "sqldriver/i_sql_driver.h"
-#include "sqldriver/sql_connection_parameters.h"  // For m_current_params_cache
-#include "sqldriver/sql_error.h"                  // For m_last_error_cache
+#include "sqldriver/sql_connection_parameters.h"
+#include "sqldriver/sql_error.h"
 
-// 前向声明 MySqlTransport 类
 namespace cpporm_mysql_transport {
     class MySqlTransportConnection;
     class MySqlTransportMetadata;
@@ -17,7 +16,7 @@ namespace cpporm_mysql_transport {
 
 namespace cpporm_sqldriver {
 
-    class MySqlSpecificResult;  // 前向声明
+    class MySqlSpecificResult;
 
     class MySqlSpecificDriver : public ISqlDriver {
       public:
@@ -28,7 +27,7 @@ namespace cpporm_sqldriver {
         bool open(const ConnectionParameters& params) override;
         void close() override;
         bool isOpen() const override;
-        bool isOpenError() const override;  // 如果上次 open() 失败或连接意外断开，则为 true
+        bool isOpenError() const override;
         bool ping(int timeout_seconds = 2) override;
 
         bool beginTransaction() override;
@@ -55,6 +54,8 @@ namespace cpporm_sqldriver {
 
         std::string formatValue(const SqlValue& value, SqlValueType type_hint = SqlValueType::Null, const SqlField* field_meta_hint = nullptr) const override;
         std::string escapeIdentifier(const std::string& identifier, IdentifierType type) const override;
+        // ***** 新增: escapeString 声明 *****
+        std::string escapeString(const std::string& unescaped_string) override;
         std::string sqlStatement(StatementType type, const std::string& tableName, const SqlRecord& rec, bool prepared, const std::string& schema = "") const override;
 
         bool setClientCharset(const std::string& charsetName) override;
@@ -65,25 +66,20 @@ namespace cpporm_sqldriver {
         SqlValue nativeHandle() const override;
         // --- End ISqlDriver 接口实现 ---
 
-        // 供 MySqlSpecificResult 访问 transport connection
         cpporm_mysql_transport::MySqlTransportConnection* getTransportConnection() const;
 
       private:
         std::unique_ptr<cpporm_mysql_transport::MySqlTransportConnection> m_transport_connection;
-        std::unique_ptr<cpporm_mysql_transport::MySqlTransportMetadata> m_transport_metadata;  // 添加 MySqlTransportMetadata 实例
+        std::unique_ptr<cpporm_mysql_transport::MySqlTransportMetadata> m_transport_metadata;
 
-        mutable SqlError m_last_error_cache;          // 存储最近的错误信息，声明为 mutable 以便 const 方法可以更新它
-        ConnectionParameters m_current_params_cache;  // 缓存当前连接参数
-        bool m_open_error_flag;                       // 标记上次打开操作是否失败
+        mutable SqlError m_last_error_cache;
+        ConnectionParameters m_current_params_cache;
+        bool m_open_error_flag;
 
-        // 辅助函数，用于从 transport 层更新 m_last_error_cache
-        void updateLastErrorCacheFromTransport(bool success_of_operation) const;  // 声明为 const
-
-        // 解析 schema 名称 (如果参数为空，则使用连接参数中的 db_name)
+        void updateLastErrorCacheFromTransport(bool success_of_operation) const;
         std::string resolveSchemaName(const std::string& schemaFilterFromArgs) const;
     };
 
-    // 驱动初始化函数声明
     void MySqlDriver_Initialize();
 
 }  // namespace cpporm_sqldriver

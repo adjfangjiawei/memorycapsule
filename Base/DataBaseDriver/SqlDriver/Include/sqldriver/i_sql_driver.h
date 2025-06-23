@@ -7,12 +7,12 @@
 #include <string>
 #include <vector>
 
-#include "sql_connection_parameters.h"  // Provides ConnectionParameters
-#include "sql_enums.h"                  // Provides Feature, IdentifierType, StatementType, TransactionIsolationLevel, ISqlDriverNs::TableType
+#include "sql_connection_parameters.h"
+#include "sql_enums.h"
 #include "sql_error.h"
 #include "sql_index.h"
 #include "sql_record.h"
-#include "sql_value.h"  // For SqlValue, SqlValueType
+#include "sql_value.h"
 
 namespace cpporm_sqldriver {
 
@@ -53,6 +53,8 @@ namespace cpporm_sqldriver {
 
         virtual std::string formatValue(const SqlValue& value, SqlValueType type_hint = SqlValueType::Null, const SqlField* field_meta_hint = nullptr) const = 0;
         virtual std::string escapeIdentifier(const std::string& identifier, IdentifierType type) const = 0;
+        // ***** 新增: escapeString 接口 *****
+        virtual std::string escapeString(const std::string& unescaped_string) = 0;
         virtual std::string sqlStatement(StatementType type, const std::string& tableName, const SqlRecord& rec, bool prepared, const std::string& schema = "") const = 0;
 
         virtual bool setClientCharset(const std::string& charsetName) = 0;
