@@ -1,4 +1,3 @@
-// Base/CppOrm/Source/session_migrate_column_ops.cpp
 #include <QDebug>
 #include <QString>
 #include <algorithm>  // For std::transform
@@ -182,11 +181,6 @@ namespace cpporm {
 
                     std::string add_col_sql_str = "ALTER TABLE " + QueryBuilder::quoteSqlIdentifier(meta.table_name) + " ADD COLUMN " + QueryBuilder::quoteSqlIdentifier(model_field.db_name) + " " + model_sql_type_str;
 
-                    // No 'pk_col_db_names_for_constraint' in this function's scope.
-                    // Primary Key with AUTOINCREMENT for SQLite should be handled by Session::getSqlTypeForCppType
-                    // returning "INTEGER PRIMARY KEY AUTOINCREMENT" or similar if model_field is PK+AI.
-                    // Or, if it's a table constraint, it's handled in migrateCreateTable.
-                    // Adding column-level PK here is generally not right unless it's the only way for a specific DB.
                     if (has_flag(model_field.flags, FieldFlag::NotNull)) {
                         add_col_sql_str += " NOT NULL";
                     }
@@ -194,8 +188,7 @@ namespace cpporm {
                     if (has_flag(model_field.flags, FieldFlag::Unique) && !has_flag(model_field.flags, FieldFlag::PrimaryKey)) {
                         add_col_sql_str += " UNIQUE";
                     }
-                    if ((driverNameUpper == "MYSQL" || driverNameUpper == "MARIADB" || driverNameUpper == "QMYSQL" || driverNameUpper == "QMARIADB") && has_flag(model_field.flags, FieldFlag::AutoIncrement) &&
-                        model_sql_type_str.find("AUTO_INCREMENT") == std::string::npos) {  // Check if type string already has it
+                    if ((driverNameUpper == "MYSQL" || driverNameUpper == "MARIADB" || driverNameUpper == "QMYSQL" || driverNameUpper == "QMARIADB") && has_flag(model_field.flags, FieldFlag::AutoIncrement) && model_sql_type_str.find("AUTO_INCREMENT") == std::string::npos) {
                         add_col_sql_str += " AUTO_INCREMENT";
                     }
                     add_col_sql_str += ";";
@@ -222,7 +215,7 @@ namespace cpporm {
                     }
 
                     bool model_is_not_null = has_flag(model_field.flags, FieldFlag::NotNull);
-                    if (model_is_not_null == db_col.is_nullable) {  // db_col.is_nullable is true if it *can* be null. So if model says NOT NULL (true) and db says IS NULLABLE (true), then they mismatch.
+                    if (model_is_not_null == db_col.is_nullable) {
                         needs_alter_notnull = true;
                     }
 
@@ -233,10 +226,16 @@ namespace cpporm {
                         std::string alter_col_sql_str_main;
                         if (driverNameUpper == "MYSQL" || driverNameUpper == "MARIADB" || driverNameUpper == "QMYSQL" || driverNameUpper == "QMARIADB") {
                             alter_col_sql_str_main = "ALTER TABLE " + QueryBuilder::quoteSqlIdentifier(meta.table_name) + " MODIFY COLUMN " + QueryBuilder::quoteSqlIdentifier(model_field.db_name) + " " + model_sql_type_str;
-                            if (model_is_not_null)
+
+                            // *** FIX START ***
+                            // 如果是主键，则强制为 NOT NULL
+                            if (model_is_not_null || has_flag(model_field.flags, FieldFlag::PrimaryKey)) {
                                 alter_col_sql_str_main += " NOT NULL";
-                            else
+                            } else {
                                 alter_col_sql_str_main += " NULL";
+                            }
+                            // *** FIX END ***
+
                             if (has_flag(model_field.flags, FieldFlag::AutoIncrement) && model_sql_type_str.find("AUTO_INCREMENT") == std::string::npos) {
                                 alter_col_sql_str_main += " AUTO_INCREMENT";
                             }

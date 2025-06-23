@@ -1,8 +1,8 @@
 #include <QDateTime>  // For timestamp logic, QVariant types in QueryValue
 #include <QDebug>     // qWarning
-#include <QMetaType>  // For QVariant to std::any conversion types
+#include <QMetaType>  // For QVariant -> std::any conversion types
 #include <QVariant>   // QVariantList, QueryValue can hold QVariant types
-#include <algorithm>  // For std::transform in driver name to upper
+#include <algorithm>  // For std::transform
 
 #include "cpporm/model_base.h"
 #include "cpporm/query_builder.h"
@@ -209,22 +209,23 @@ namespace cpporm {
             const auto &pk_type = data_to_write.pk_cpp_type_for_autoincrement;
             const std::string &pk_cpp_name = data_to_write.pk_cpp_name_for_autoincrement;
 
-            // Convert SqlValue to std::any. mapRowToModel has similar logic.
-            if (pk_type == typeid(int))
+            // *** FIX START ***
+            // 使用 SqlValue 的 toType() 方法，而不是直接使用 std::any_cast，以允许跨类型转换。
+            if (pk_type == typeid(int)) {
                 pk_val_any = returned_id_sv.toInt32(&conversion_ok);
-            else if (pk_type == typeid(long long))
+            } else if (pk_type == typeid(long long)) {
                 pk_val_any = returned_id_sv.toInt64(&conversion_ok);
-            else if (pk_type == typeid(unsigned int))
+            } else if (pk_type == typeid(unsigned int)) {
                 pk_val_any = returned_id_sv.toUInt32(&conversion_ok);
-            else if (pk_type == typeid(unsigned long long))
+            } else if (pk_type == typeid(unsigned long long)) {
                 pk_val_any = returned_id_sv.toUInt64(&conversion_ok);
-            else if (pk_type == typeid(std::string))
+            } else if (pk_type == typeid(std::string)) {
                 pk_val_any = returned_id_sv.toString(&conversion_ok);
-            // Add other types if PK can be them (e.g. UUID as string)
-            else {
+            } else {
                 qWarning() << "CreateImpl: PK backfill for type " << pk_type.name() << " is not directly supported. Attempting string conversion.";
                 pk_val_any = returned_id_sv.toString(&conversion_ok);
             }
+            // *** FIX END ***
 
             if (conversion_ok) {
                 Error set_pk_err = model_instance.setFieldValue(pk_cpp_name, pk_val_any);

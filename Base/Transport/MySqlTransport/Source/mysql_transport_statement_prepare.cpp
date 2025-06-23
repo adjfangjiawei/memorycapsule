@@ -1,5 +1,4 @@
 #include <mysql/mysql.h>
-// algorithm 和 string 包含已在core.cpp
 
 #include "cpporm_mysql_transport/mysql_transport_statement.h"
 
@@ -7,13 +6,10 @@ namespace cpporm_mysql_transport {
 
     bool MySqlTransportStatement::prepare() {
         if (m_is_utility_command) {
-            // 对于工具命令，我们认为它在构造时就已经“逻辑上准备好了”
-            // 因为它将通过 mysql_real_query 执行，不需要 C API 的 prepare 步骤。
             m_is_prepared = true;
             return true;
         }
 
-        // 对于非工具命令
         if (!m_stmt_handle) {
             setError(MySqlTransportError::Category::ApiUsageError, "Statement handle is not initialized for prepare (non-utility command).");
             return false;
@@ -25,8 +21,7 @@ namespace cpporm_mysql_transport {
         clearError();
 
         if (mysql_stmt_prepare(m_stmt_handle, m_original_query.c_str(), m_original_query.length()) != 0) {
-            // mysql_stmt_error 使用 m_stmt_handle
-            setErrorFromMySQL(reinterpret_cast<MYSQL*>(m_stmt_handle), "mysql_stmt_prepare failed");
+            setErrorFromStatementHandle("mysql_stmt_prepare failed");
             m_is_prepared = false;
             return false;
         }

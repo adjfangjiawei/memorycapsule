@@ -1,4 +1,3 @@
-// MySqlTransport/Source/mysql_transport_statement_query.cpp
 #include <mysql/mysql.h>
 
 #include "cpporm_mysql_transport/mysql_transport_connection.h"
@@ -22,12 +21,12 @@ namespace cpporm_mysql_transport {
 
         if (m_is_utility_command) {
             if (mysql_real_query(m_connection->getNativeHandle(), m_original_query.c_str(), m_original_query.length()) != 0) {
-                setErrorFromMySQL(m_connection->getNativeHandle(), "mysql_real_query failed for utility command: " + m_original_query);
+                setErrorFromConnectionHandle(m_connection->getNativeHandle(), "mysql_real_query failed for utility command: " + m_original_query);
                 return nullptr;
             }
             res_handle = mysql_store_result(m_connection->getNativeHandle());
             if (!res_handle && mysql_errno(m_connection->getNativeHandle()) != 0) {
-                setErrorFromMySQL(m_connection->getNativeHandle(), "mysql_store_result failed for utility command: " + m_original_query);
+                setErrorFromConnectionHandle(m_connection->getNativeHandle(), "mysql_store_result failed for utility command: " + m_original_query);
                 return nullptr;
             }
             m_affected_rows = mysql_affected_rows(m_connection->getNativeHandle());
@@ -44,55 +43,20 @@ namespace cpporm_mysql_transport {
                 }
             }
 
-            // --- BEGIN Revised cleanup logic for prepared statements ---
-            if (m_is_prepared && m_stmt_handle) {
-                // 1. Free any result currently associated with the statement handle
-                //    This is important if the statement was used before and its result wasn't fully consumed/freed.
-                if (mysql_stmt_free_result(m_stmt_handle)) {
-                    // This call can return an error if no result was pending, which is fine.
-                    // We only care about unexpected errors.
-                    if (mysql_stmt_errno(m_stmt_handle) != 0 && mysql_stmt_errno(m_stmt_handle) != CR_NO_RESULT_SET) {
-                        // Log this error, but proceed with execution attempt.
-                        // setErrorFromMySQL(reinterpret_cast<MYSQL*>(m_stmt_handle), "Error freeing previous result explicitly");
-                    }
-                }
-
-                // 2. Loop through any *additional* pending results from a previous multi-result execution
-                //    This ensures the statement handle is ready for a new mysql_stmt_execute().
-                //    mysql_stmt_next_result() advances to the next result.
-                //    If it returns 0, there was another result set, which we also need to free.
-                //    If it returns -1, no more results.
-                //    If it returns >0, an error occurred.
-                int next_result_status;
-                while ((next_result_status = mysql_stmt_next_result(m_stmt_handle)) == 0) {
-                    // Successfully advanced to another result set. We need to free it as well
-                    // if we are not going to process it.
-                    if (mysql_stmt_free_result(m_stmt_handle)) {
-                        if (mysql_stmt_errno(m_stmt_handle) != 0 && mysql_stmt_errno(m_stmt_handle) != CR_NO_RESULT_SET) {
-                            // Log error
-                        }
-                    }
-                }
-                if (next_result_status > 0) {  // An error occurred while trying to advance
-                    setErrorFromMySQL(reinterpret_cast<MYSQL*>(m_stmt_handle), "Error consuming previous multiple results");
-                    return nullptr;
-                }
-                // After the loop, next_result_status is -1 (no more results) or an error was handled.
-            }
-            // --- END Revised cleanup logic ---
+            while (mysql_stmt_next_result(m_stmt_handle) == 0);
 
             if (mysql_stmt_execute(m_stmt_handle) != 0) {
-                setErrorFromMySQL(reinterpret_cast<MYSQL*>(m_stmt_handle), "mysql_stmt_execute failed in executeQuery");
+                setErrorFromStatementHandle("mysql_stmt_execute failed in executeQuery");
                 return nullptr;
             }
 
             res_handle = mysql_stmt_result_metadata(m_stmt_handle);
             if (!res_handle) {
                 if (mysql_stmt_errno(m_stmt_handle) != 0) {
-                    setErrorFromMySQL(reinterpret_cast<MYSQL*>(m_stmt_handle), "mysql_stmt_result_metadata failed");
+                    setErrorFromStatementHandle("mysql_stmt_result_metadata failed");
                     return nullptr;
                 } else if (mysql_stmt_field_count(m_stmt_handle) == 0) {
-                    // 合法：查询未产生列
+                    // 合法情况
                 } else {
                     setError(MySqlTransportError::Category::QueryError, "Failed to get result metadata (prepared), but fields were expected.");
                     return nullptr;

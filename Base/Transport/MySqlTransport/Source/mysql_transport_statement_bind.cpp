@@ -1,313 +1,172 @@
-// cpporm_mysql_transport/mysql_transport_index_lister.cpp
 #include <mysql/mysql.h>
 
-#include <algorithm>
-#include <map>
+#include <cstring>  // For std::memset
 
-#include "cpporm_mysql_transport/mysql_transport_connection.h"
-#include "cpporm_mysql_transport/mysql_transport_index_lister.h"
-#include "cpporm_mysql_transport/mysql_transport_result.h"
 #include "cpporm_mysql_transport/mysql_transport_statement.h"
 #include "mysql_protocol/mysql_type_converter.h"
 
 namespace cpporm_mysql_transport {
 
-    MySqlTransportIndexLister::MySqlTransportIndexLister(MySqlTransportConnection* connection_context) : m_conn_ctx(connection_context) {
-        if (!m_conn_ctx) {
-            setError_(MySqlTransportError::Category::InternalError, "IndexLister: Null connection context provided.");
+    bool MySqlTransportStatement::bindParam(unsigned int pos_zero_based, const MySqlTransportBindParam& param) {
+        // 更正：首先检查是否是工具类命令
+        if (m_is_utility_command) {
+            setError(MySqlTransportError::Category::ApiUsageError, "Cannot bind parameters to a utility command (e.g., SHOW, DESCRIBE).");
+            return false;
         }
-    }
 
-    void MySqlTransportIndexLister::clearError_() {
-        m_last_error = MySqlTransportError();
-    }
-
-    void MySqlTransportIndexLister::setError_(MySqlTransportError::Category cat, const std::string& msg) {
-        m_last_error = MySqlTransportError(cat, msg);
-    }
-
-    void MySqlTransportIndexLister::setErrorFromConnection_(const std::string& context) {
-        if (m_conn_ctx) {
-            m_last_error = m_conn_ctx->getLastError();
-            std::string combined_msg = context;
-            if (!m_last_error.message.empty()) {
-                if (!combined_msg.empty()) combined_msg += ": ";
-                combined_msg += m_last_error.message;
+        if (!m_stmt_handle) {
+            setError(MySqlTransportError::Category::ApiUsageError, "Statement handle not initialized for bindParam.");
+            return false;
+        }
+        if (!m_is_prepared) {
+            if (!prepare()) {
+                return false;
             }
-            m_last_error.message = combined_msg;
-            if (m_last_error.isOk() && !context.empty() && context.find("Failed to create statement") != std::string::npos) {
-                m_last_error.category = MySqlTransportError::Category::QueryError;
-            } else if (m_last_error.isOk() && !context.empty()) {
-                m_last_error.category = MySqlTransportError::Category::InternalError;
+        }
+        if (pos_zero_based >= m_bind_buffers.size()) {
+            setError(MySqlTransportError::Category::ApiUsageError, "Bind position out of range.");
+            return false;
+        }
+
+        clearError();
+
+        // 重置特定的绑定缓冲区条目
+        std::memset(&m_bind_buffers[pos_zero_based], 0, sizeof(MYSQL_BIND));
+
+        auto& bind_struct = m_bind_buffers[pos_zero_based];
+        auto& data_buffer = m_param_data_buffers[pos_zero_based];
+        auto& is_null_indicator = m_param_is_null_indicators[pos_zero_based];
+        auto& length_indicator = m_param_length_indicators[pos_zero_based];
+
+        const auto& native_value = param.value;
+
+        if (native_value.is_null()) {
+            auto result = mysql_protocol::setupMySqlBindForNull(bind_struct, reinterpret_cast<bool*>(&is_null_indicator), MYSQL_TYPE_NULL);
+            if (!result) {
+                setErrorFromProtocol(result.error(), "Failed to setup bind for NULL");
+                return false;
             }
+            // 对于 setupMySqlBindForNull, buffer 和其他指针成员由函数设置
+            return true;
+        }
+
+        std::expected<void, mysql_protocol::MySqlProtocolError> result;
+
+        if (std::holds_alternative<bool>(native_value.data)) {
+            // 对于基本类型，数据直接存在成员中，buffer指向该成员
+            data_buffer.resize(sizeof(bool));
+            *reinterpret_cast<bool*>(data_buffer.data()) = std::get<bool>(native_value.data);
+            result = mysql_protocol::setupMySqlBindForInput(bind_struct, reinterpret_cast<bool*>(&is_null_indicator), std::get<bool>(native_value.data));
+        } else if (std::holds_alternative<int8_t>(native_value.data)) {
+            data_buffer.resize(sizeof(int8_t));
+            *reinterpret_cast<int8_t*>(data_buffer.data()) = std::get<int8_t>(native_value.data);
+            result = mysql_protocol::setupMySqlBindForInput(bind_struct, reinterpret_cast<bool*>(&is_null_indicator), native_value.original_mysql_flags & UNSIGNED_FLAG, *reinterpret_cast<int8_t*>(data_buffer.data()));
+        } else if (std::holds_alternative<uint8_t>(native_value.data)) {
+            data_buffer.resize(sizeof(uint8_t));
+            *reinterpret_cast<uint8_t*>(data_buffer.data()) = std::get<uint8_t>(native_value.data);
+            result = mysql_protocol::setupMySqlBindForInput(bind_struct, reinterpret_cast<bool*>(&is_null_indicator), true, *reinterpret_cast<int8_t*>(data_buffer.data()));
+        } else if (std::holds_alternative<int16_t>(native_value.data)) {
+            data_buffer.resize(sizeof(int16_t));
+            *reinterpret_cast<int16_t*>(data_buffer.data()) = std::get<int16_t>(native_value.data);
+            result = mysql_protocol::setupMySqlBindForInput(bind_struct, reinterpret_cast<bool*>(&is_null_indicator), native_value.original_mysql_flags & UNSIGNED_FLAG, *reinterpret_cast<int16_t*>(data_buffer.data()));
+        } else if (std::holds_alternative<uint16_t>(native_value.data)) {
+            data_buffer.resize(sizeof(uint16_t));
+            *reinterpret_cast<uint16_t*>(data_buffer.data()) = std::get<uint16_t>(native_value.data);
+            result = mysql_protocol::setupMySqlBindForInput(bind_struct, reinterpret_cast<bool*>(&is_null_indicator), true, *reinterpret_cast<int16_t*>(data_buffer.data()));
+        } else if (std::holds_alternative<int32_t>(native_value.data)) {
+            data_buffer.resize(sizeof(int32_t));
+            *reinterpret_cast<int32_t*>(data_buffer.data()) = std::get<int32_t>(native_value.data);
+            result = mysql_protocol::setupMySqlBindForInput(bind_struct, reinterpret_cast<bool*>(&is_null_indicator), native_value.original_mysql_flags & UNSIGNED_FLAG, *reinterpret_cast<int32_t*>(data_buffer.data()));
+        } else if (std::holds_alternative<uint32_t>(native_value.data)) {
+            data_buffer.resize(sizeof(uint32_t));
+            *reinterpret_cast<uint32_t*>(data_buffer.data()) = std::get<uint32_t>(native_value.data);
+            result = mysql_protocol::setupMySqlBindForInput(bind_struct, reinterpret_cast<bool*>(&is_null_indicator), true, *reinterpret_cast<int32_t*>(data_buffer.data()));
+        } else if (std::holds_alternative<int64_t>(native_value.data)) {
+            data_buffer.resize(sizeof(int64_t));
+            *reinterpret_cast<int64_t*>(data_buffer.data()) = std::get<int64_t>(native_value.data);
+            result = mysql_protocol::setupMySqlBindForInput(bind_struct, reinterpret_cast<bool*>(&is_null_indicator), native_value.original_mysql_flags & UNSIGNED_FLAG, *reinterpret_cast<int64_t*>(data_buffer.data()));
+        } else if (std::holds_alternative<uint64_t>(native_value.data)) {
+            data_buffer.resize(sizeof(uint64_t));
+            *reinterpret_cast<uint64_t*>(data_buffer.data()) = std::get<uint64_t>(native_value.data);
+            result = mysql_protocol::setupMySqlBindForInput(bind_struct, reinterpret_cast<bool*>(&is_null_indicator), true, *reinterpret_cast<int64_t*>(data_buffer.data()));
+        } else if (std::holds_alternative<float>(native_value.data)) {
+            data_buffer.resize(sizeof(float));
+            *reinterpret_cast<float*>(data_buffer.data()) = std::get<float>(native_value.data);
+            result = mysql_protocol::setupMySqlBindForInput(bind_struct, reinterpret_cast<bool*>(&is_null_indicator), *reinterpret_cast<float*>(data_buffer.data()));
+        } else if (std::holds_alternative<double>(native_value.data)) {
+            data_buffer.resize(sizeof(double));
+            *reinterpret_cast<double*>(data_buffer.data()) = std::get<double>(native_value.data);
+            result = mysql_protocol::setupMySqlBindForInput(bind_struct, reinterpret_cast<bool*>(&is_null_indicator), *reinterpret_cast<double*>(data_buffer.data()));
+        } else if (std::holds_alternative<std::string>(native_value.data)) {
+            const auto& str = std::get<std::string>(native_value.data);
+            data_buffer.assign(str.begin(), str.end());
+            result = mysql_protocol::setupMySqlBindForInputString(bind_struct, reinterpret_cast<bool*>(&is_null_indicator), &length_indicator, native_value.original_mysql_type, reinterpret_cast<char*>(data_buffer.data()), data_buffer.size());
+        } else if (std::holds_alternative<std::vector<unsigned char>>(native_value.data)) {
+            data_buffer = std::get<std::vector<unsigned char>>(native_value.data);
+            result = mysql_protocol::setupMySqlBindForInputBlob(bind_struct, reinterpret_cast<bool*>(&is_null_indicator), &length_indicator, native_value.original_mysql_type, data_buffer.data(), data_buffer.size());
+        } else if (std::holds_alternative<MYSQL_TIME>(native_value.data)) {
+            data_buffer.resize(sizeof(MYSQL_TIME));
+            std::memcpy(data_buffer.data(), &std::get<MYSQL_TIME>(native_value.data), sizeof(MYSQL_TIME));
+            result = mysql_protocol::setupMySqlBindForInputTime(bind_struct, reinterpret_cast<bool*>(&is_null_indicator), native_value.original_mysql_type, reinterpret_cast<MYSQL_TIME*>(data_buffer.data()));
         } else {
-            setError_(MySqlTransportError::Category::InternalError, context.empty() ? "Lister: Connection context is null." : context + ": Connection context is null.");
+            result = std::unexpected(mysql_protocol::MySqlProtocolError(mysql_protocol::InternalErrc::CONVERSION_UNSUPPORTED_TYPE, "Unsupported type for binding in MySqlTransportStatement"));
         }
+
+        if (!result) {
+            setErrorFromProtocol(result.error(), "Failed to setup bind for input parameter at pos " + std::to_string(pos_zero_based));
+            return false;
+        }
+
+        // *** FIX START ***
+        // 之前的问题：对于数字类型，setupMySqlBindForInput函数没有设置buffer指针。
+        // 修复：在这里统一为所有非NULL且buffer指针尚未被设置的类型（主要是数字类型）设置buffer指针。
+        if (!native_value.is_null() && bind_struct.buffer == nullptr) {
+            bind_struct.buffer = data_buffer.data();
+        }
+        // *** FIX END ***
+
+        return true;
     }
 
-    std::optional<std::vector<MySqlTransportIndexInfo>> MySqlTransportIndexLister::getTableIndexes(const std::string& table_name, const std::string& db_name_filter_param) {
-        if (!m_conn_ctx || !m_conn_ctx->isConnected()) {
-            setError_(MySqlTransportError::Category::ConnectionError, "Not connected for getTableIndexes.");
-            return std::nullopt;
-        }
-        if (table_name.empty()) {
-            setError_(MySqlTransportError::Category::ApiUsageError, "Table name cannot be empty for getTableIndexes.");
-            return std::nullopt;
-        }
-        clearError_();
-
-        std::string db_to_use = db_name_filter_param;
-        if (db_to_use.empty()) {
-            db_to_use = m_conn_ctx->getCurrentParams().db_name;
-            if (db_to_use.empty()) {
-                setError_(MySqlTransportError::Category::ApiUsageError, "Database name not specified and not set in connection for getTableIndexes.");
-                return std::nullopt;
+    bool MySqlTransportStatement::bindParams(const std::vector<MySqlTransportBindParam>& params) {
+        // 更正：这是修复 SHOW/DESCRIBE 命令问题的关键
+        if (m_is_utility_command) {
+            if (!params.empty()) {
+                setError(MySqlTransportError::Category::ApiUsageError, "Cannot bind parameters to a utility command (e.g., SHOW, DESCRIBE).");
+                return false;
             }
-        }
-        std::string fq_table_name = "`" + m_conn_ctx->escapeString(db_to_use, false) + "`.`" + m_conn_ctx->escapeString(table_name, false) + "`";
-        std::string query = "SHOW INDEX FROM " + fq_table_name;
-
-        std::unique_ptr<MySqlTransportStatement> stmt = m_conn_ctx->createStatement(query);
-        if (!stmt || (stmt->getNativeStatementHandle() == nullptr && !stmt->getError().isOk())) {
-            setErrorFromConnection_("Failed to create statement for getTableIndexes for " + fq_table_name);
-            if (stmt && !stmt->getError().isOk()) {  // If stmt was created but failed internally
-                m_last_error = stmt->getError();
-            }
-            return std::nullopt;
-        }
-        std::unique_ptr<MySqlTransportResult> result = stmt->executeQuery();
-        if (!result || !result->isValid()) {
-            m_last_error = stmt->getError();
-            return std::nullopt;
+            return true;  // 对工具类命令“绑定”零个参数是合法的
         }
 
-        std::map<std::string, MySqlTransportIndexInfo> index_map;
-
-        int idx_table = result->getFieldIndex("Table");
-        int idx_non_unique = result->getFieldIndex("Non_unique");
-        int idx_key_name = result->getFieldIndex("Key_name");
-        int idx_seq_in_index = result->getFieldIndex("Seq_in_index");
-        int idx_column_name = result->getFieldIndex("Column_name");
-        int idx_collation = result->getFieldIndex("Collation");
-        int idx_cardinality = result->getFieldIndex("Cardinality");
-        int idx_sub_part = result->getFieldIndex("Sub_part");
-        int idx_null = result->getFieldIndex("Null");
-        int idx_index_type = result->getFieldIndex("Index_type");
-        int idx_comment = result->getFieldIndex("Comment");
-        int idx_index_comment = result->getFieldIndex("Index_comment");
-        int idx_visible = result->getFieldIndex("Visible");        // MySQL 8+
-        int idx_expression = result->getFieldIndex("Expression");  // MySQL 8+ for functional indexes
-
-        if (idx_key_name == -1 || idx_column_name == -1 || idx_seq_in_index == -1 || idx_table == -1 || idx_non_unique == -1 || idx_index_type == -1) {  // idx_null might not always be present or critical in all versions/outputs
-            setError_(MySqlTransportError::Category::InternalError, "Could not find one or more required columns in SHOW INDEX output.");
-            return std::nullopt;
+        if (!m_stmt_handle) {
+            setError(MySqlTransportError::Category::ApiUsageError, "Statement handle not initialized for bindParams.");
+            return false;
         }
 
-        while (result->fetchNextRow()) {
-            std::string key_name_str_val;
-            if (auto key_name_native_opt = result->getValue(static_cast<unsigned int>(idx_key_name))) {
-                if (auto key_name_str_opt = key_name_native_opt->get_if<std::string>()) {
-                    key_name_str_val = *key_name_str_opt;
-                } else {
-                    continue;
-                }
-            } else {
-                continue;
-            }
-
-            auto it = index_map.find(key_name_str_val);
-            if (it == index_map.end()) {
-                MySqlTransportIndexInfo index_info;
-
-                if (auto val_opt = result->getValue(static_cast<unsigned int>(idx_table))) {
-                    if (auto s_opt = val_opt->get_if<std::string>()) {
-                        index_info.tableName = *s_opt;
-                    }
-                }
-
-                if (auto val_opt = result->getValue(static_cast<unsigned int>(idx_non_unique))) {
-                    bool nu_val_set = false;
-                    if (auto pval_u64_opt = val_opt->get_if<uint64_t>()) {
-                        index_info.isNonUnique = (*pval_u64_opt == 1);
-                        nu_val_set = true;
-                    } else if (auto pval_i64_opt = val_opt->get_if<int64_t>()) {
-                        index_info.isNonUnique = (*pval_i64_opt == 1);
-                        nu_val_set = true;
-                    } else if (auto pval_u32_opt = val_opt->get_if<uint32_t>()) {
-                        index_info.isNonUnique = (*pval_u32_opt == 1);
-                        nu_val_set = true;
-                    } else if (auto pval_i32_opt = val_opt->get_if<int32_t>()) {
-                        index_info.isNonUnique = (*pval_i32_opt == 1);
-                        nu_val_set = true;
-                    }
-                    if (!nu_val_set) index_info.isNonUnique = true;  // Default
-                }
-                index_info.indexName = key_name_str_val;
-
-                if (auto val_opt = result->getValue(static_cast<unsigned int>(idx_index_type))) {
-                    if (auto s_opt = val_opt->get_if<std::string>()) {
-                        index_info.indexType = *s_opt;
-                    }
-                }
-
-                if (idx_comment != -1) {  // Check if column exists
-                    if (auto val_opt = result->getValue(static_cast<unsigned int>(idx_comment))) {
-                        if (!val_opt->is_null()) {
-                            if (auto s_opt = val_opt->get_if<std::string>()) {
-                                index_info.comment = *s_opt;
-                            }
-                        }
-                    }
-                }
-                if (idx_index_comment != -1) {  // Check if column exists
-                    if (auto val_opt = result->getValue(static_cast<unsigned int>(idx_index_comment))) {
-                        if (!val_opt->is_null()) {
-                            if (auto s_opt = val_opt->get_if<std::string>()) {
-                                index_info.indexComment = *s_opt;
-                            }
-                        }
-                    }
-                }
-                if (idx_visible != -1) {  // Check if column exists (MySQL 8+)
-                    if (auto val_opt = result->getValue(static_cast<unsigned int>(idx_visible))) {
-                        if (!val_opt->is_null()) {
-                            if (auto s_opt = val_opt->get_if<std::string>()) {
-                                index_info.isVisible = (*s_opt == "YES" || *s_opt == "1");
-                            }
-                            // else if other types for visible...
-                        } else {
-                            index_info.isVisible = true;
-                        }  // Assuming NULL means visible or default
-                    } else {
-                        index_info.isVisible = true;
-                    }  // Default if value is not there
-                } else {
-                    index_info.isVisible = true;  // Default for older MySQL
-                }
-                it = index_map.insert({key_name_str_val, index_info}).first;
-            }
-
-            MySqlTransportIndexColumn col_def;
-            if (auto val_opt = result->getValue(static_cast<unsigned int>(idx_column_name))) {
-                if (auto s_opt = val_opt->get_if<std::string>()) {
-                    col_def.columnName = *s_opt;
-                } else {
-                    continue;
-                }
-            } else {
-                continue;
-            }
-
-            if (auto val_opt = result->getValue(static_cast<unsigned int>(idx_seq_in_index))) {
-                if (auto pval_u64_opt = val_opt->get_if<uint64_t>()) {
-                    col_def.sequenceInIndex = static_cast<unsigned int>(*pval_u64_opt);
-                } else if (auto pval_i64_opt = val_opt->get_if<int64_t>()) {
-                    col_def.sequenceInIndex = static_cast<unsigned int>(*pval_i64_opt);
-                } else if (auto pval_u32_opt = val_opt->get_if<uint32_t>()) {
-                    col_def.sequenceInIndex = *pval_u32_opt;
-                } else if (auto pval_i32_opt = val_opt->get_if<int32_t>()) {
-                    col_def.sequenceInIndex = static_cast<unsigned int>(*pval_i32_opt);
-                }
-            }
-
-            if (idx_collation != -1) {  // Check if column exists
-                if (auto val_opt = result->getValue(static_cast<unsigned int>(idx_collation))) {
-                    if (!val_opt->is_null()) {
-                        if (auto s_opt = val_opt->get_if<std::string>()) {
-                            col_def.collation = *s_opt;
-                        }
-                    }
-                }
-            }
-            if (idx_cardinality != -1) {  // Check if column exists
-                if (auto val_opt = result->getValue(static_cast<unsigned int>(idx_cardinality))) {
-                    if (!val_opt->is_null()) {
-                        if (auto pval_u64_opt = val_opt->get_if<uint64_t>()) {
-                            col_def.cardinality = static_cast<long long>(*pval_u64_opt);
-                        } else if (auto pval_i64_opt = val_opt->get_if<int64_t>()) {
-                            col_def.cardinality = *pval_i64_opt;
-                        } else if (auto pval_u32_opt = val_opt->get_if<uint32_t>()) {
-                            col_def.cardinality = static_cast<long long>(*pval_u32_opt);
-                        } else if (auto pval_i32_opt = val_opt->get_if<int32_t>()) {
-                            col_def.cardinality = *pval_i32_opt;
-                        }
-                    }
-                }
-            }
-            if (idx_sub_part != -1) {  // Check if column exists
-                if (auto val_opt = result->getValue(static_cast<unsigned int>(idx_sub_part))) {
-                    if (!val_opt->is_null()) {
-                        if (auto pval_u64_opt = val_opt->get_if<uint64_t>()) {
-                            col_def.subPart = static_cast<unsigned int>(*pval_u64_opt);
-                        } else if (auto pval_i64_opt = val_opt->get_if<int64_t>()) {
-                            col_def.subPart = static_cast<unsigned int>(*pval_i64_opt);
-                        } else if (auto pval_u32_opt = val_opt->get_if<uint32_t>()) {
-                            col_def.subPart = *pval_u32_opt;
-                        } else if (auto pval_i32_opt = val_opt->get_if<int32_t>()) {
-                            col_def.subPart = static_cast<unsigned int>(*pval_i32_opt);
-                        }
-                    }
-                }
-            }
-
-            // Ensure idx_null is valid before using it
-            if (idx_null != -1) {
-                if (auto val_opt = result->getValue(static_cast<unsigned int>(idx_null))) {
-                    if (!val_opt->is_null()) {
-                        if (auto s_opt = val_opt->get_if<std::string>()) {
-                            col_def.isNullable = (*s_opt == "YES");
-                        }
-                    } else {  // SQL NULL in "Null" column implies column is NOT NULL by convention of SHOW INDEX
-                        col_def.isNullable = false;
-                    }
-                } else {  // If getValue returns no optional, assume not nullable for safety.
-                    col_def.isNullable = false;
-                }
-            } else {  // If "Null" column is not present, assume not nullable as a fallback.
-                col_def.isNullable = false;
-            }
-
-            if (idx_expression != -1) {  // Check if column exists (MySQL 8+)
-                if (auto val_opt = result->getValue(static_cast<unsigned int>(idx_expression))) {
-                    if (!val_opt->is_null()) {
-                        if (auto s_opt = val_opt->get_if<std::string>()) {
-                            col_def.expression = *s_opt;
-                        }
-                    }
-                }
-            }
-            it->second.columns.push_back(col_def);
-        }
-
-        if (!result->getError().isOk()) {
-            m_last_error = result->getError();
-        }
-
-        std::vector<MySqlTransportIndexInfo> indexes_vec;
-        indexes_vec.reserve(index_map.size());
-        for (auto& pair_kv : index_map) {
-            std::sort(pair_kv.second.columns.begin(), pair_kv.second.columns.end(), [](const MySqlTransportIndexColumn& a, const MySqlTransportIndexColumn& b) {
-                return a.sequenceInIndex < b.sequenceInIndex;
-            });
-            indexes_vec.push_back(std::move(pair_kv.second));
-        }
-        return indexes_vec;
-    }
-
-    std::optional<MySqlTransportIndexInfo> MySqlTransportIndexLister::getPrimaryIndex(const std::string& table_name, const std::string& db_name_filter) {
-        auto indexes_opt = getTableIndexes(table_name, db_name_filter);
-        if (indexes_opt) {
-            for (const auto& index : indexes_opt.value()) {
-                if (index.indexName == "PRIMARY") {
-                    return index;
-                }
+        if (!m_is_prepared) {
+            if (!prepare()) {
+                return false;
             }
         }
-        return std::nullopt;
-    }
 
-    MySqlTransportError MySqlTransportIndexLister::getLastError() const {
-        return m_last_error;
+        if (params.size() != m_bind_buffers.size()) {
+            setError(MySqlTransportError::Category::ApiUsageError, "Parameter count mismatch. Expected " + std::to_string(m_bind_buffers.size()) + ", got " + std::to_string(params.size()) + ".");
+            return false;
+        }
+
+        for (size_t i = 0; i < params.size(); ++i) {
+            if (!bindParam(static_cast<unsigned int>(i), params[i])) {
+                // bindParam 已经设置了错误
+                return false;
+            }
+        }
+
+        if (mysql_stmt_bind_param(m_stmt_handle, m_bind_buffers.data()) != 0) {
+            setErrorFromStatementHandle("mysql_stmt_bind_param failed");
+            return false;
+        }
+
+        return true;
     }
 
 }  // namespace cpporm_mysql_transport

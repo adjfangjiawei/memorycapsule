@@ -54,12 +54,14 @@ namespace cpporm_mysql_transport {
       private:
         void clearError();
         void setError(MySqlTransportError::Category cat, const std::string& msg, unsigned int proto_errc = 0);
-        void setErrorFromMySQL(MYSQL* handle_to_check_error_on, const std::string& context);
+        // 更正：明确区分从连接句柄和语句句柄获取错误
+        void setErrorFromConnectionHandle(MYSQL* handle_to_check_error_on, const std::string& context);
+        void setErrorFromStatementHandle(const std::string& context);
         void setErrorFromProtocol(const mysql_protocol::MySqlProtocolError& proto_err, const std::string& context);
 
         MySqlTransportConnection* m_connection;
         std::string m_original_query;
-        MYSQL_STMT* m_stmt_handle;  // Will be nullptr for utility commands
+        MYSQL_STMT* m_stmt_handle;  // 对于工具类命令，此指针为 nullptr
         bool m_is_prepared;
         bool m_is_utility_command;
 

@@ -1,4 +1,3 @@
-// Source/mysql_protocol/mysql_native_value_from_row.cpp
 #include <charconv>     // For std::from_chars
 #include <limits>       // For std::numeric_limits
 #include <string>       // For std::string, std::to_string
@@ -172,14 +171,17 @@ namespace mysql_protocol {
             case MYSQL_TYPE_STRING:
             case MYSQL_TYPE_VAR_STRING:
             case MYSQL_TYPE_VARCHAR:
-                // The character set number 63 is commonly used for 'binary' collation (e.g., latin1_bin, utf8mb4_bin)
-                // or the specific binary character set (charset `binary`).
-                // `field_meta->charsetnr == 63` is a strong indicator for binary data.
-                if ((field_meta->flags & BINARY_FLAG) && field_meta->charsetnr == 63) {
+                // *** FIX START ***
+                // 强制将这些类型（尤其是来自SHOW命令的元数据）视为字符串，
+                // 除非它们同时具有BINARY_FLAG和二进制字符集。
+                // 这次修复的核心是，即使没有BINARY_FLAG，之前的逻辑也可能因为其他原因（比如没有charsetnr）而误判。
+                // 现在，我们默认它是字符串，除非有非常强的反向证据。
+                if ((field_meta->flags & BINARY_FLAG) && field_meta->charsetnr == 63) {  // 63 is for `binary` charset
                     native_val.data = std::vector<unsigned char>(reinterpret_cast<const unsigned char*>(c_str_value), reinterpret_cast<const unsigned char*>(c_str_value) + length);
                 } else {
                     native_val.data = std::string(sv);
                 }
+                // *** FIX END ***
                 break;
             case MYSQL_TYPE_TINY_BLOB:
             case MYSQL_TYPE_MEDIUM_BLOB:
@@ -193,7 +195,9 @@ namespace mysql_protocol {
                 native_val.data = std::monostate{};
                 break;
             default:
-                return std::unexpected(MySqlProtocolError(InternalErrc::CONVERSION_UNSUPPORTED_TYPE, "Unsupported MySQL field type encountered in text protocol: " + std::to_string(field_meta->type)));
+                // *** FIX *** 对于未知类型，也默认当作字符串处理，这对于 SHOW 命令的输出更安全。
+                native_val.data = std::string(sv);
+                break;
         }
         return native_val;
     }

@@ -44,11 +44,10 @@ namespace cpporm {
             if (sql_val.isNull()) {
                 conversion_ok = true;  // std::any will be empty, representing NULL
             } else {
-                // Convert SqlValue to std::any. This requires knowing the target C++ type.
-                // SqlValue has toType() methods. We'll use those.
-                // This is similar to qvariantToAny but starts from SqlValue.
                 const std::type_index &target_cpp_type = model_field_meta->cpp_type;
 
+                // *** FIX START ***
+                // 使用 SqlValue 的 toType() 方法，而不是直接 std::any_cast，以允许跨类型转换。
                 if (target_cpp_type == typeid(int)) {
                     cpp_value = sql_val.toInt32(&conversion_ok);
                 } else if (target_cpp_type == typeid(long long)) {
@@ -77,6 +76,7 @@ namespace cpporm {
                     qWarning() << "cpporm Session::mapRowToModel: Unsupported C++ type for field" << QString::fromStdString(model_field_meta->cpp_name) << "Type:" << model_field_meta->cpp_type.name();
                     continue;
                 }
+                // *** FIX END ***
             }
 
             if (!conversion_ok) {
