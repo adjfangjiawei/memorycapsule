@@ -1,4 +1,3 @@
-// Base/CppOrm/Source/session_static_utils.cpp
 #include <QDebug>
 #include <QMetaType>
 #include <QVariant>
@@ -27,7 +26,7 @@ namespace cpporm {
             if (driverName_upper == "QPSQL" || driverName_upper == "QSQLITE") return "INTEGER";
             return "INT UNSIGNED";
         }
-        if (cpp_type == typeid(long long)) return "BIGINT";
+        if (cpp_type == typeid(int64_t)) return "BIGINT";  // FIX: was long long
         if (cpp_type == typeid(unsigned long long)) {
             if (driverName_upper == "QPSQL" || driverName_upper == "QSQLITE") return "BIGINT";
             return "BIGINT UNSIGNED";
@@ -73,7 +72,7 @@ namespace cpporm {
         }
         if (target_cpp_type == typeid(int)) {
             out_any = qv.toInt(&out_conversion_ok);
-        } else if (target_cpp_type == typeid(long long)) {
+        } else if (target_cpp_type == typeid(int64_t)) {  // FIX: was long long
             out_any = qv.toLongLong(&out_conversion_ok);
         } else if (target_cpp_type == typeid(unsigned int)) {
             out_any = qv.toUInt(&out_conversion_ok);
@@ -150,7 +149,7 @@ namespace cpporm {
         if (!val.has_value()) return nullptr;
         const auto &type = val.type();
         if (type == typeid(int)) return std::any_cast<int>(val);
-        if (type == typeid(long long)) return std::any_cast<long long>(val);
+        if (type == typeid(int64_t)) return static_cast<long long>(std::any_cast<int64_t>(val));  // FIX: was long long, ensure cast to variant type
         if (type == typeid(double)) return std::any_cast<double>(val);
         if (type == typeid(std::string)) return std::any_cast<std::string>(val);
         if (type == typeid(bool)) return std::any_cast<bool>(val);

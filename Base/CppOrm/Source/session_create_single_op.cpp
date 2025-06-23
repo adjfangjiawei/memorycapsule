@@ -1,8 +1,6 @@
-#include <QDateTime>  // For timestamp logic, QVariant types in QueryValue
+#include <QDateTime>  // For timestamp logic, QVariant in QueryValue
 #include <QDebug>     // qWarning
-#include <QMetaType>  // For QVariant -> std::any conversion types
-#include <QVariant>   // QVariantList, QueryValue can hold QVariant types
-#include <algorithm>  // For std::transform
+#include <QVariant>   // QVariantList for suffix bindings if buildInsertSQLSuffix still uses it
 
 #include "cpporm/model_base.h"
 #include "cpporm/query_builder.h"
@@ -209,11 +207,10 @@ namespace cpporm {
             const auto &pk_type = data_to_write.pk_cpp_type_for_autoincrement;
             const std::string &pk_cpp_name = data_to_write.pk_cpp_name_for_autoincrement;
 
-            // *** FIX START ***
             // 使用 SqlValue 的 toType() 方法，而不是直接使用 std::any_cast，以允许跨类型转换。
             if (pk_type == typeid(int)) {
                 pk_val_any = returned_id_sv.toInt32(&conversion_ok);
-            } else if (pk_type == typeid(long long)) {
+            } else if (pk_type == typeid(int64_t)) {  // FIX: was long long
                 pk_val_any = returned_id_sv.toInt64(&conversion_ok);
             } else if (pk_type == typeid(unsigned int)) {
                 pk_val_any = returned_id_sv.toUInt32(&conversion_ok);
@@ -225,7 +222,6 @@ namespace cpporm {
                 qWarning() << "CreateImpl: PK backfill for type " << pk_type.name() << " is not directly supported. Attempting string conversion.";
                 pk_val_any = returned_id_sv.toString(&conversion_ok);
             }
-            // *** FIX END ***
 
             if (conversion_ok) {
                 Error set_pk_err = model_instance.setFieldValue(pk_cpp_name, pk_val_any);

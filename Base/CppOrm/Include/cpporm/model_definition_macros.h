@@ -187,8 +187,6 @@ namespace cpporm {
 #define cpporm_INDEX(IndexNameOrFirstCol, ...) cpporm_INDEX_INTERNAL(false, IndexNameOrFirstCol, ##__VA_ARGS__)
 #define cpporm_UNIQUE_INDEX(IndexNameOrFirstCol, ...) cpporm_INDEX_INTERNAL(true, IndexNameOrFirstCol, ##__VA_ARGS__)
 
-// *** FIX START ***
-// 修复 PRIMARY_KEY 宏，自动添加 NotNull 标志
 #undef cpporm_PRIMARY_KEY
 #define cpporm_PRIMARY_KEY(CppType, CppName, DbNameStr, ...)                                                                                                                                                                                                                    \
   public:                                                                                                                                                                                                                                                                       \
@@ -203,7 +201,6 @@ namespace cpporm {
                                                                       true);                                                                                                                                                                                                    \
                                                                                                                                                                                                                                                                                 \
   public:
-// *** FIX END ***
 
 #define cpporm_AUTO_INCREMENT_PRIMARY_KEY(CppType, CppName, DbNameStr) cpporm_PRIMARY_KEY(CppType, CppName, DbNameStr, cpporm::FieldFlag::AutoIncrement)
 

@@ -1,10 +1,10 @@
-#include <QByteArray>
-#include <QDate>
-#include <QDateTime>
-#include <QDebug>
-#include <QMetaType>
+#include <QDateTime>  // For timestamp logic, QVariant types in QueryValue
+#include <QDebug>     // qWarning, qInfo
+#include <QMetaType>  // For QVariant -> std::any conversion types
+#include <QVariant>   // Still used for std::any <-> QueryValue <-> SqlValue intermediate if needed
 
 #include "cpporm/model_base.h"
+#include "cpporm/query_builder.h"
 #include "cpporm/session.h"
 // #include <QSqlRecord> // No longer using QSqlRecord
 #include <QTime>
@@ -46,11 +46,10 @@ namespace cpporm {
             } else {
                 const std::type_index &target_cpp_type = model_field_meta->cpp_type;
 
-                // *** FIX START ***
                 // 使用 SqlValue 的 toType() 方法，而不是直接 std::any_cast，以允许跨类型转换。
                 if (target_cpp_type == typeid(int)) {
                     cpp_value = sql_val.toInt32(&conversion_ok);
-                } else if (target_cpp_type == typeid(long long)) {
+                } else if (target_cpp_type == typeid(int64_t)) {  // FIX: was long long
                     cpp_value = sql_val.toInt64(&conversion_ok);
                 } else if (target_cpp_type == typeid(unsigned int)) {
                     cpp_value = sql_val.toUInt32(&conversion_ok);
@@ -76,7 +75,6 @@ namespace cpporm {
                     qWarning() << "cpporm Session::mapRowToModel: Unsupported C++ type for field" << QString::fromStdString(model_field_meta->cpp_name) << "Type:" << model_field_meta->cpp_type.name();
                     continue;
                 }
-                // *** FIX END ***
             }
 
             if (!conversion_ok) {

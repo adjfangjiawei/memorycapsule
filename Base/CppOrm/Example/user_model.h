@@ -1,4 +1,3 @@
-// Base/CppOrm/Include/user_model.h
 #pragma once
 
 #include <QDateTime>
@@ -11,9 +10,8 @@ class User : public cpporm::Model<User> {
   cpporm_DEFINE_MODEL_CLASS_NAME(User)
 
       public :
-      // Switched id to BIGINT AUTO_INCREMENT which is common for MySQL.
-      // If your DB needs SERIAL or other, adjust getSqlTypeForCppType accordingly or use explicit DB type hint.
-      cpporm_AUTO_INCREMENT_PRIMARY_KEY(long long, id, "id")
+      // FIX: Changed from long long to int64_t for better type portability and to fix bad_any_cast issues.
+      cpporm_AUTO_INCREMENT_PRIMARY_KEY(int64_t, id, "id")
 
       // Changed TEXT to VARCHAR(255) for name and email to allow indexing without prefix length on MySQL
       cpporm_FIELD_TYPE(std::string, name, "name", "VARCHAR(255)") cpporm_FIELD_TYPE(int, age, "age", "INT") cpporm_FIELD_TYPE(std::string, email, "email", "VARCHAR(255)")

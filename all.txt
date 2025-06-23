@@ -701,8 +701,7 @@ namespace mysql_protocol {
         return native_val;
     }
 
-}  // namespace mysql_protocol// Source/mysql_protocol/mysql_native_value_from_row.cpp
-#include <charconv>     // For std::from_chars
+}  // namespace mysql_protocol#include <charconv>     // For std::from_chars
 #include <limits>       // For std::numeric_limits
 #include <string>       // For std::string, std::to_string
 #include <string_view>  // For std::string_view
@@ -875,10 +874,7 @@ namespace mysql_protocol {
             case MYSQL_TYPE_STRING:
             case MYSQL_TYPE_VAR_STRING:
             case MYSQL_TYPE_VARCHAR:
-                // The character set number 63 is commonly used for 'binary' collation (e.g., latin1_bin, utf8mb4_bin)
-                // or the specific binary character set (charset `binary`).
-                // `field_meta->charsetnr == 63` is a strong indicator for binary data.
-                if ((field_meta->flags & BINARY_FLAG) && field_meta->charsetnr == 63) {
+                if ((field_meta->flags & BINARY_FLAG) && field_meta->charsetnr == 63) {  // 63 is for `binary` charset
                     native_val.data = std::vector<unsigned char>(reinterpret_cast<const unsigned char*>(c_str_value), reinterpret_cast<const unsigned char*>(c_str_value) + length);
                 } else {
                     native_val.data = std::string(sv);
@@ -896,7 +892,9 @@ namespace mysql_protocol {
                 native_val.data = std::monostate{};
                 break;
             default:
-                return std::unexpected(MySqlProtocolError(InternalErrc::CONVERSION_UNSUPPORTED_TYPE, "Unsupported MySQL field type encountered in text protocol: " + std::to_string(field_meta->type)));
+                // 对于未知类型，特别是来自 SHOW 命令的元数据，默认当作字符串处理更安全
+                native_val.data = std::string(sv);
+                break;
         }
         return native_val;
     }
@@ -4350,16 +4348,87 @@ namespace cpporm_sqldriver {
         return SqlValue();  // 返回空 SqlValue 表示失败
     }
 
-}  // namespace cpporm_sqldriver// SqlDriver/Source/mysql/mysql_specific_result.cpp
+}  // namespace cpporm_sqldriver#include "cpporm_mysql_transport/mysql_transport_statement.h"
+#include "sqldriver/mysql/mysql_driver_helper.h"
+#include "sqldriver/mysql/mysql_specific_driver.h"
 #include "sqldriver/mysql/mysql_specific_result.h"
 
-#include <stdexcept>  // For std::logic_error
+namespace cpporm_sqldriver {
+
+    bool MySqlSpecificResult::applyBindingsToTransportStatement() {
+        if (!m_transport_statement || !m_transport_statement->isPrepared()) {
+            m_last_error_cache = SqlError(ErrorCategory::DriverInternal, "Statement not prepared for binding.", "applyBindingsToTransportStatement");
+            return false;
+        }
+        m_ordered_transport_bind_params.clear();
+
+        if (m_placeholder_info.hasNamedPlaceholders) {
+            m_ordered_transport_bind_params.reserve(m_placeholder_info.orderedParamNames.size());
+            for (const std::string& name : m_placeholder_info.orderedParamNames) {
+                auto it = m_named_bind_values_map.find(name);
+                if (it == m_named_bind_values_map.end()) {
+                    m_last_error_cache = SqlError(ErrorCategory::Syntax, "Named parameter ':" + name + "' used in query but not bound.", "applyBindings");
+                    return false;
+                }
+                m_ordered_transport_bind_params.emplace_back(mysql_helper::sqlValueToMySqlNativeValue(it->second));
+            }
+        } else {
+            m_ordered_transport_bind_params.reserve(m_positional_bind_values.size());
+            for (const auto& sql_val : m_positional_bind_values) {
+                m_ordered_transport_bind_params.emplace_back(mysql_helper::sqlValueToMySqlNativeValue(sql_val));
+            }
+        }
+
+        bool success = m_transport_statement->bindParams(m_ordered_transport_bind_params);
+        if (!success) updateLastErrorCacheFromTransportStatement();
+        return success;
+    }
+
+    void MySqlSpecificResult::addPositionalBindValue(const SqlValue& value, ParamType /*type*/) {
+        m_positional_bind_values.push_back(value);
+    }
+
+    void MySqlSpecificResult::setNamedBindValue(const std::string& placeholder, const SqlValue& value, ParamType /*type*/) {
+        std::string clean_placeholder = placeholder;
+        if (!placeholder.empty() && (placeholder[0] == ':' || placeholder[0] == '@')) {
+            clean_placeholder = placeholder.substr(1);
+        }
+        m_named_bind_values_map[clean_placeholder] = value;
+    }
+
+    void MySqlSpecificResult::clearBindValues() {
+        m_positional_bind_values.clear();
+        m_named_bind_values_map.clear();
+        m_ordered_transport_bind_params.clear();
+    }
+
+    void MySqlSpecificResult::bindBlobStream(int /*pos*/, std::shared_ptr<std::istream> /*stream*/, long long /*size*/, ParamType /*type*/) {
+        m_last_error_cache = SqlError(ErrorCategory::FeatureNotSupported, "BLOB streaming is not yet implemented.");
+    }
+
+    void MySqlSpecificResult::bindBlobStream(const std::string& /*placeholder*/, std::shared_ptr<std::istream> /*stream*/, long long /*size*/, ParamType /*type*/) {
+        m_last_error_cache = SqlError(ErrorCategory::FeatureNotSupported, "BLOB streaming is not yet implemented.");
+    }
+
+    SqlValue MySqlSpecificResult::getOutParameter(int /*pos*/) const {
+        return SqlValue();
+    }
+
+    SqlValue MySqlSpecificResult::getOutParameter(const std::string& /*name*/) const {
+        return SqlValue();
+    }
+
+    std::map<std::string, SqlValue> MySqlSpecificResult::getAllOutParameters() const {
+        return {};
+    }
+
+}  // namespace cpporm_sqldriver#include <stdexcept>
 
 #include "cpporm_mysql_transport/mysql_transport_result.h"
 #include "cpporm_mysql_transport/mysql_transport_statement.h"
-#include "cpporm_mysql_transport/mysql_transport_types.h"  // For MySqlTransportBindParam
-#include "sqldriver/mysql/mysql_driver_helper.h"           // For converters and NamedPlaceholderInfo
+#include "sqldriver/mysql/mysql_driver_helper.h"
 #include "sqldriver/mysql/mysql_specific_driver.h"
+#include "sqldriver/mysql/mysql_specific_result.h"
 
 namespace cpporm_sqldriver {
 
@@ -4370,7 +4439,7 @@ namespace cpporm_sqldriver {
           m_current_row_index(-1),
           m_num_rows_affected_cache(0),
           m_is_active_flag(false),
-          m_precision_policy(NumericalPrecisionPolicy::LowPrecision),  // 直接使用，因为它在 cpporm_sqldriver 命名空间中定义
+          m_precision_policy(NumericalPrecisionPolicy::LowPrecision),
           m_named_binding_syntax(SqlResultNs::NamedBindingSyntax::Colon),
           m_scroll_mode_hint(SqlResultNs::ScrollMode::ForwardOnly),
           m_prefetch_size_hint(0) {
@@ -4409,7 +4478,7 @@ namespace cpporm_sqldriver {
 
     MySqlSpecificResult& MySqlSpecificResult::operator=(MySqlSpecificResult&& other) noexcept {
         if (this != &other) {
-            finish();  // 清理当前资源
+            finish();
 
             m_driver = other.m_driver;
             m_transport_statement = std::move(other.m_transport_statement);
@@ -4441,7 +4510,6 @@ namespace cpporm_sqldriver {
         if (m_transport_statement) {
             m_last_error_cache = mysql_helper::transportErrorToSqlError(m_transport_statement->getError());
         } else {
-            // 只有在之前没有错误时才设置，以避免覆盖更具体的错误
             if (m_last_error_cache.category() == ErrorCategory::NoError) {
                 m_last_error_cache = SqlError(ErrorCategory::DriverInternal, "Transport statement is null.", "updateLastErrorCacheFromTransportStatement");
             }
@@ -4463,6 +4531,188 @@ namespace cpporm_sqldriver {
     void MySqlSpecificResult::clearLastErrorCache() {
         m_last_error_cache = SqlError();
     }
+
+    void MySqlSpecificResult::cleanupAfterExecution(bool retain_result_set) {
+        m_current_row_index = -1;
+        m_current_record_buffer_cache.clear();
+        if (!retain_result_set) {
+            m_transport_result_set.reset();
+        }
+    }
+
+    bool MySqlSpecificResult::ensureResultSet() {
+        if (m_transport_result_set && m_transport_result_set->isValid()) {
+            return true;
+        }
+        if (m_transport_statement && m_transport_statement->isPrepared() && m_is_active_flag) {
+            if (m_driver->getTransportConnection()->getNativeHandle() && m_transport_statement->getNativeStatementHandle() && mysql_stmt_field_count(m_transport_statement->getNativeStatementHandle()) > 0) {
+                m_transport_result_set = m_transport_statement->executeQuery();
+                if (m_transport_result_set && m_transport_result_set->isValid()) {
+                    return true;
+                } else {
+                    updateLastErrorCacheFromTransportResult();
+                    return false;
+                }
+            }
+        }
+        m_last_error_cache = SqlError(ErrorCategory::DriverInternal, "No valid result set available or statement not a query.", "ensureResultSet");
+        return false;
+    }
+
+    bool MySqlSpecificResult::isActive() const {
+        return m_is_active_flag;
+    }
+
+    bool MySqlSpecificResult::isValid() const {
+        return m_is_active_flag && m_transport_result_set && m_transport_result_set->isValid();
+    }
+
+    SqlError MySqlSpecificResult::error() const {
+        return m_last_error_cache;
+    }
+
+    const std::string& MySqlSpecificResult::lastQuery() const {
+        return m_original_query_text;
+    }
+
+    const std::string& MySqlSpecificResult::preparedQueryText() const {
+        return m_placeholder_info.processedQuery;
+    }
+
+    void MySqlSpecificResult::finish() {
+        cleanupAfterExecution(false);
+        if (m_transport_statement) {
+            m_transport_statement->close();
+        }
+        m_is_active_flag = false;
+        m_positional_bind_values.clear();
+        m_named_bind_values_map.clear();
+        m_ordered_transport_bind_params.clear();
+    }
+
+    void MySqlSpecificResult::clear() {
+        finish();
+        m_original_query_text.clear();
+        m_placeholder_info = mysql_helper::NamedPlaceholderInfo();
+    }
+
+    void MySqlSpecificResult::reset() {
+        if (m_transport_statement && m_transport_statement->getNativeStatementHandle()) {
+            if (mysql_stmt_reset(m_transport_statement->getNativeStatementHandle()) == 0) {
+                cleanupAfterExecution(false);
+                m_is_active_flag = m_transport_statement->isPrepared();
+                clearBindValues();
+                return;
+            } else {
+                updateLastErrorCacheFromTransportStatement();
+            }
+        }
+        m_is_active_flag = false;
+    }
+
+}  // namespace cpporm_sqldriver#include "cpporm_mysql_transport/mysql_transport_result.h"
+#include "sqldriver/mysql/mysql_driver_helper.h"
+#include "sqldriver/mysql/mysql_specific_driver.h"
+#include "sqldriver/mysql/mysql_specific_result.h"
+
+namespace cpporm_sqldriver {
+
+    SqlValue MySqlSpecificResult::data(int column_index) {
+        if (!ensureResultSet()) return SqlValue();
+        if (m_current_row_index < 0 || column_index < 0 || static_cast<unsigned int>(column_index) >= (m_transport_result_set ? m_transport_result_set->getFieldCount() : 0)) {
+            m_last_error_cache = SqlError(ErrorCategory::DataRelated, "Invalid index or no current row for data().", "data");
+            return SqlValue();
+        }
+        clearLastErrorCache();
+        auto native_val_opt = m_transport_result_set->getValue(static_cast<unsigned int>(column_index));
+        if (native_val_opt) {
+            return mysql_helper::mySqlNativeValueToSqlValue(*native_val_opt);
+        } else {
+            updateLastErrorCacheFromTransportResult();
+            return SqlValue();
+        }
+    }
+
+    bool MySqlSpecificResult::isNull(int column_index) {
+        if (!ensureResultSet()) return true;
+        if (m_current_row_index < 0 || column_index < 0 || static_cast<unsigned int>(column_index) >= (m_transport_result_set ? m_transport_result_set->getFieldCount() : 0)) {
+            return true;
+        }
+        clearLastErrorCache();
+        bool is_null_val = m_transport_result_set->isNull(static_cast<unsigned int>(column_index));
+        if (!m_transport_result_set->getError().isOk()) {
+            updateLastErrorCacheFromTransportResult();
+        }
+        return is_null_val;
+    }
+
+    SqlRecord MySqlSpecificResult::recordMetadata() const {
+        if (m_transport_result_set && m_transport_result_set->isValid()) {
+            return mysql_helper::metasToSqlRecord(m_transport_result_set->getFieldsMeta());
+        }
+        return SqlRecord();
+    }
+
+    SqlRecord MySqlSpecificResult::currentFetchedRow() const {
+        return m_current_record_buffer_cache;
+    }
+
+    SqlField MySqlSpecificResult::field(int column_index) const {
+        if (m_transport_result_set && m_transport_result_set->isValid()) {
+            auto transport_field_meta_opt = m_transport_result_set->getFieldMeta(static_cast<unsigned int>(column_index));
+            if (transport_field_meta_opt) {
+                return mysql_helper::metaToSqlField(*transport_field_meta_opt);
+            }
+        }
+        return SqlField();
+    }
+
+    long long MySqlSpecificResult::numRowsAffected() {
+        return static_cast<long long>(m_num_rows_affected_cache);
+    }
+
+    SqlValue MySqlSpecificResult::lastInsertId() {
+        return m_last_insert_id_cache;
+    }
+
+    int MySqlSpecificResult::columnCount() const {
+        if (m_transport_result_set && m_transport_result_set->isValid()) {
+            return static_cast<int>(m_transport_result_set->getFieldCount());
+        }
+        return 0;
+    }
+
+    int MySqlSpecificResult::size() {
+        if (m_transport_result_set && m_transport_result_set->isValid()) {
+            return static_cast<int>(m_transport_result_set->getRowCount());
+        }
+        return -1;
+    }
+
+    int MySqlSpecificResult::at() const {
+        return static_cast<int>(m_current_row_index);
+    }
+
+    std::shared_ptr<std::istream> MySqlSpecificResult::openReadableBlobStream(int /*column_index*/) {
+        m_last_error_cache = SqlError(ErrorCategory::FeatureNotSupported, "BLOB streaming is not yet implemented.");
+        return nullptr;
+    }
+
+    std::shared_ptr<std::ostream> MySqlSpecificResult::openWritableBlobStream(int /*column_index*/, long long /*initial_size_hint*/) {
+        m_last_error_cache = SqlError(ErrorCategory::FeatureNotSupported, "BLOB streaming is not yet implemented.");
+        return nullptr;
+    }
+
+}  // namespace cpporm_sqldriver#include <algorithm>
+#include <cctype>
+
+#include "cpporm_mysql_transport/mysql_transport_result.h"
+#include "cpporm_mysql_transport/mysql_transport_statement.h"
+#include "sqldriver/mysql/mysql_driver_helper.h"
+#include "sqldriver/mysql/mysql_specific_driver.h"
+#include "sqldriver/mysql/mysql_specific_result.h"
+
+namespace cpporm_sqldriver {
 
     bool MySqlSpecificResult::prepare(const std::string& query, const std::map<std::string, SqlValueType>* /*named_bindings_type_hints*/, SqlResultNs::ScrollMode scroll, SqlResultNs::ConcurrencyMode /*concur*/) {
         if (!m_driver || !m_driver->getTransportConnection()) {
@@ -4486,9 +4736,8 @@ namespace cpporm_sqldriver {
 
         m_transport_statement = m_driver->getTransportConnection()->createStatement(m_placeholder_info.processedQuery);
         if (!m_transport_statement) {
-            // 假设 MySqlTransportConnection::createStatement 失败时会在连接上设置错误
             m_last_error_cache = mysql_helper::transportErrorToSqlError(m_driver->getTransportConnection()->getLastError());
-            if (m_last_error_cache.category() == ErrorCategory::NoError) {  // 如果连接上没有特定错误
+            if (m_last_error_cache.category() == ErrorCategory::NoError) {
                 m_last_error_cache = SqlError(ErrorCategory::DriverInternal, "Failed to create transport statement.", "prepare");
             }
             return false;
@@ -4497,35 +4746,6 @@ namespace cpporm_sqldriver {
         bool success = m_transport_statement->prepare();
         updateLastErrorCacheFromTransportStatement();
         m_is_active_flag = success;
-        return success;
-    }
-
-    bool MySqlSpecificResult::applyBindingsToTransportStatement() {
-        if (!m_transport_statement || !m_transport_statement->isPrepared()) {
-            m_last_error_cache = SqlError(ErrorCategory::DriverInternal, "Statement not prepared for binding.", "applyBindingsToTransportStatement");
-            return false;
-        }
-        m_ordered_transport_bind_params.clear();
-
-        if (m_placeholder_info.hasNamedPlaceholders) {
-            m_ordered_transport_bind_params.reserve(m_placeholder_info.orderedParamNames.size());
-            for (const std::string& name : m_placeholder_info.orderedParamNames) {
-                auto it = m_named_bind_values_map.find(name);
-                if (it == m_named_bind_values_map.end()) {
-                    m_last_error_cache = SqlError(ErrorCategory::Syntax, "Named parameter ':" + name + "' used in query but not bound.", "applyBindings");
-                    return false;
-                }
-                m_ordered_transport_bind_params.emplace_back(mysql_helper::sqlValueToMySqlNativeValue(it->second));
-            }
-        } else {
-            m_ordered_transport_bind_params.reserve(m_positional_bind_values.size());
-            for (const auto& sql_val : m_positional_bind_values) {
-                m_ordered_transport_bind_params.emplace_back(mysql_helper::sqlValueToMySqlNativeValue(sql_val));
-            }
-        }
-        // MySqlTransportBindParam 的构造函数现在接受 MySqlNativeValue
-        bool success = m_transport_statement->bindParams(m_ordered_transport_bind_params);
-        if (!success) updateLastErrorCacheFromTransportStatement();
         return success;
     }
 
@@ -4545,19 +4765,69 @@ namespace cpporm_sqldriver {
             return false;
         }
 
-        std::optional<my_ulonglong> affected_opt = m_transport_statement->execute();
-        if (affected_opt) {
+        bool is_query_type = m_transport_statement->isUtilityCommand();
+        if (!is_query_type) {
+            std::string upper_query = m_original_query_text;
+            std::transform(upper_query.begin(), upper_query.end(), upper_query.begin(), [](unsigned char c) {
+                return std::toupper(c);
+            });
+            if (upper_query.rfind("SELECT", 0) == 0) {
+                is_query_type = true;
+            }
+        }
+
+        if (is_query_type) {
+            m_transport_result_set = m_transport_statement->executeQuery();
+            if (!m_transport_result_set || !m_transport_result_set->isValid()) {
+                updateLastErrorCacheFromTransportStatement();
+                m_is_active_flag = false;
+                return false;
+            }
+            m_num_rows_affected_cache = m_transport_result_set->getRowCount();
+            m_last_insert_id_cache = mysql_helper::mySqlNativeValueToSqlValue({});
+        } else {
+            std::optional<my_ulonglong> affected_opt = m_transport_statement->execute();
+            if (!affected_opt) {
+                updateLastErrorCacheFromTransportStatement();
+                m_is_active_flag = false;
+                return false;
+            }
             m_num_rows_affected_cache = *affected_opt;
-            // MySqlTransportStatement::getLastInsertId() 返回 my_ulonglong
-            // MySqlNativeValue 构造函数需要能够处理 uint64_t (my_ulonglong 通常是这个类型)
+
             mysql_protocol::MySqlNativeValue last_id_native;
             last_id_native.data = static_cast<uint64_t>(m_transport_statement->getLastInsertId());
-            last_id_native.original_mysql_type = MYSQL_TYPE_LONGLONG;  // 假设 ID 是 LONGLONG
-            last_id_native.original_mysql_flags = UNSIGNED_FLAG;       // 通常自增 ID 是无符号的
+            last_id_native.original_mysql_type = MYSQL_TYPE_LONGLONG;
+            last_id_native.original_mysql_flags = UNSIGNED_FLAG;
             m_last_insert_id_cache = mysql_helper::mySqlNativeValueToSqlValue(last_id_native);
 
-            if (m_driver->getTransportConnection()->getNativeHandle() && m_transport_statement->getNativeStatementHandle() &&  // 确保语句句柄有效
-                mysql_stmt_field_count(m_transport_statement->getNativeStatementHandle()) > 0) {
+            if (m_driver->getTransportConnection()->getNativeHandle() && m_transport_statement->getNativeStatementHandle() && mysql_stmt_field_count(m_transport_statement->getNativeStatementHandle()) > 0) {
+                m_transport_result_set = m_transport_statement->executeQuery();
+                if (!m_transport_result_set || !m_transport_result_set->isValid()) {
+                    updateLastErrorCacheFromTransportResult();
+                    m_is_active_flag = false;
+                    return false;
+                }
+            } else {
+                m_transport_result_set.reset();
+            }
+        }
+        m_is_active_flag = true;
+        return true;
+    }
+
+    bool MySqlSpecificResult::nextResult() {
+        if (!m_transport_statement || !m_transport_statement->getNativeStatementHandle()) {
+            m_last_error_cache = SqlError(ErrorCategory::DriverInternal, "Statement handle not available for nextResult.", "nextResult");
+            return false;
+        }
+        cleanupAfterExecution(false);
+        clearLastErrorCache();
+
+        int status = mysql_stmt_next_result(m_transport_statement->getNativeStatementHandle());
+        if (status == 0) {
+            m_current_row_index = -1;
+            m_num_rows_affected_cache = mysql_stmt_affected_rows(m_transport_statement->getNativeStatementHandle());
+            if (m_driver->getTransportConnection()->getNativeHandle() && mysql_stmt_field_count(m_transport_statement->getNativeStatementHandle()) > 0) {
                 m_transport_result_set = m_transport_statement->executeQuery();
                 if (!m_transport_result_set || !m_transport_result_set->isValid()) {
                     updateLastErrorCacheFromTransportResult();
@@ -4569,6 +4839,12 @@ namespace cpporm_sqldriver {
             }
             m_is_active_flag = true;
             return true;
+        } else if (status == -1) {
+            m_is_active_flag = false;
+            if (mysql_stmt_errno(m_transport_statement->getNativeStatementHandle()) != 0) {
+                updateLastErrorCacheFromTransportStatement();
+            }
+            return false;
         } else {
             updateLastErrorCacheFromTransportStatement();
             m_is_active_flag = false;
@@ -4576,56 +4852,12 @@ namespace cpporm_sqldriver {
         }
     }
 
-    void MySqlSpecificResult::cleanupAfterExecution(bool retain_result_set) {
-        m_current_row_index = -1;
-        m_current_record_buffer_cache.clear();
-        // DML 操作后 m_num_rows_affected_cache 和 m_last_insert_id_cache 应该保留
-        // 直到下一次 exec。 cleanupAfterExecution 主要清理结果集相关的状态。
-        // 所以，不重置 m_num_rows_affected_cache 和 m_last_insert_id_cache。
+}  // namespace cpporm_sqldriver#include "cpporm_mysql_transport/mysql_transport_result.h"
+#include "sqldriver/mysql/mysql_driver_helper.h"
+#include "sqldriver/mysql/mysql_specific_driver.h"
+#include "sqldriver/mysql/mysql_specific_result.h"
 
-        if (!retain_result_set) {
-            m_transport_result_set.reset();
-        }
-    }
-
-    bool MySqlSpecificResult::ensureResultSet() {
-        if (m_transport_result_set && m_transport_result_set->isValid()) {
-            return true;
-        }
-        if (m_transport_statement && m_transport_statement->isPrepared() && m_is_active_flag) {
-            // 如果语句是活动的，并且没有结果集，尝试执行 executeQuery 获取结果集
-            if (m_driver->getTransportConnection()->getNativeHandle() && m_transport_statement->getNativeStatementHandle() && mysql_stmt_field_count(m_transport_statement->getNativeStatementHandle()) > 0) {
-                m_transport_result_set = m_transport_statement->executeQuery();
-                if (m_transport_result_set && m_transport_result_set->isValid()) {
-                    return true;
-                } else {
-                    updateLastErrorCacheFromTransportResult();
-                    return false;
-                }
-            }
-        }
-        // 修正 ErrorCategory
-        m_last_error_cache = SqlError(ErrorCategory::DriverInternal, "No valid result set available or statement not a query.", "ensureResultSet");
-        return false;
-    }
-
-    void MySqlSpecificResult::addPositionalBindValue(const SqlValue& value, ParamType /*type*/) {
-        m_positional_bind_values.push_back(value);
-    }
-
-    void MySqlSpecificResult::setNamedBindValue(const std::string& placeholder, const SqlValue& value, ParamType /*type*/) {
-        std::string clean_placeholder = placeholder;
-        if (!placeholder.empty() && (placeholder[0] == ':' || placeholder[0] == '@')) {
-            clean_placeholder = placeholder.substr(1);
-        }
-        m_named_bind_values_map[clean_placeholder] = value;
-    }
-
-    void MySqlSpecificResult::clearBindValues() {
-        m_positional_bind_values.clear();
-        m_named_bind_values_map.clear();
-        m_ordered_transport_bind_params.clear();
-    }
+namespace cpporm_sqldriver {
 
     bool MySqlSpecificResult::fetchNext(SqlRecord& record_buffer) {
         if (!ensureResultSet()) return false;
@@ -4655,225 +4887,66 @@ namespace cpporm_sqldriver {
         }
     }
 
-    SqlValue MySqlSpecificResult::data(int column_index) {
-        if (!ensureResultSet()) return SqlValue();
-        if (m_current_row_index < 0 || column_index < 0 || static_cast<unsigned int>(column_index) >= (m_transport_result_set ? m_transport_result_set->getFieldCount() : 0)) {
-            m_last_error_cache = SqlError(ErrorCategory::DataRelated, "Invalid index or no current row for data().", "data");  // 使用 DataRelated
-            return SqlValue();
-        }
-        clearLastErrorCache();
-        auto native_val_opt = m_transport_result_set->getValue(static_cast<unsigned int>(column_index));
-        if (native_val_opt) {
-            return mysql_helper::mySqlNativeValueToSqlValue(*native_val_opt);
-        } else {
-            updateLastErrorCacheFromTransportResult();
-            return SqlValue();
-        }
+    bool MySqlSpecificResult::fetchPrevious(SqlRecord& /*record_buffer*/) {
+        m_last_error_cache = SqlError(ErrorCategory::FeatureNotSupported, "fetchPrevious is not supported by this driver.");
+        return false;
     }
 
-    bool MySqlSpecificResult::isNull(int column_index) {
-        if (!ensureResultSet()) return true;
-        if (m_current_row_index < 0 || column_index < 0 || static_cast<unsigned int>(column_index) >= (m_transport_result_set ? m_transport_result_set->getFieldCount() : 0)) {
-            return true;
-        }
-        clearLastErrorCache();
-        bool is_null_val = m_transport_result_set->isNull(static_cast<unsigned int>(column_index));
-        // isNull 本身不太可能在 transport 层产生新错误，除非状态非法
-        if (!m_transport_result_set->getError().isOk()) {
-            updateLastErrorCacheFromTransportResult();
-        }
-        return is_null_val;
+    bool MySqlSpecificResult::fetchFirst(SqlRecord& /*record_buffer*/) {
+        m_last_error_cache = SqlError(ErrorCategory::FeatureNotSupported, "fetchFirst is not supported by this driver.");
+        return false;
     }
 
-    SqlRecord MySqlSpecificResult::recordMetadata() const {
-        if (m_transport_result_set && m_transport_result_set->isValid()) {
-            return mysql_helper::metasToSqlRecord(m_transport_result_set->getFieldsMeta());
-        }
-        return SqlRecord();
+    bool MySqlSpecificResult::fetchLast(SqlRecord& /*record_buffer*/) {
+        m_last_error_cache = SqlError(ErrorCategory::FeatureNotSupported, "fetchLast is not supported by this driver.");
+        return false;
     }
 
-    long long MySqlSpecificResult::numRowsAffected() {
-        return static_cast<long long>(m_num_rows_affected_cache);
+    bool MySqlSpecificResult::fetch(int /*index*/, SqlRecord& /*record_buffer*/, CursorMovement /*movement*/) {
+        m_last_error_cache = SqlError(ErrorCategory::FeatureNotSupported, "fetch(index) is not supported by this driver.");
+        return false;
     }
 
-    SqlValue MySqlSpecificResult::lastInsertId() {
-        return m_last_insert_id_cache;
-    }
+}  // namespace cpporm_sqldriver#include "sqldriver/mysql/mysql_specific_result.h"
 
-    int MySqlSpecificResult::columnCount() const {
-        if (m_transport_result_set && m_transport_result_set->isValid()) {
-            return static_cast<int>(m_transport_result_set->getFieldCount());
-        }
-        return 0;
-    }
+// No special includes needed for these simple option setters
 
-    int MySqlSpecificResult::size() {
-        if (m_transport_result_set && m_transport_result_set->isValid()) {
-            return static_cast<int>(m_transport_result_set->getRowCount());
-        }
-        return -1;
-    }
-
-    int MySqlSpecificResult::at() const {
-        return static_cast<int>(m_current_row_index);
-    }
-
-    bool MySqlSpecificResult::isActive() const {
-        return m_is_active_flag;
-    }
-
-    bool MySqlSpecificResult::isValid() const {
-        // 一个结果集要有效，它必须是活动的，并且 transport 结果集也必须是有效的
-        return m_is_active_flag && m_transport_result_set && m_transport_result_set->isValid();
-    }
-
-    SqlError MySqlSpecificResult::error() const {
-        return m_last_error_cache;
-    }
-
-    const std::string& MySqlSpecificResult::lastQuery() const {
-        return m_original_query_text;
-    }
-
-    const std::string& MySqlSpecificResult::preparedQueryText() const {
-        return m_placeholder_info.processedQuery;
-    }
-
-    void MySqlSpecificResult::finish() {
-        cleanupAfterExecution(false);
-        if (m_transport_statement) {
-            m_transport_statement->close();
-        }
-        m_is_active_flag = false;
-        m_positional_bind_values.clear();
-        m_named_bind_values_map.clear();
-        m_ordered_transport_bind_params.clear();
-    }
-    void MySqlSpecificResult::clear() {
-        finish();
-        m_original_query_text.clear();
-        m_placeholder_info = mysql_helper::NamedPlaceholderInfo();
-    }
+namespace cpporm_sqldriver {
 
     bool MySqlSpecificResult::setQueryTimeout(int /*seconds*/) {
+        m_last_error_cache = SqlError(ErrorCategory::FeatureNotSupported, "setQueryTimeout is not supported by this driver.");
         return false;
     }
+
     bool MySqlSpecificResult::setNumericalPrecisionPolicy(NumericalPrecisionPolicy policy) {
         m_precision_policy = policy;
+        // This policy would be checked in data conversion functions,
+        // but setting it is always considered successful.
         return true;
     }
+
     bool MySqlSpecificResult::setPrefetchSize(int rows) {
         m_prefetch_size_hint = rows;
+        // This is just a hint, driver doesn't actually support it, so return false.
+        m_last_error_cache = SqlError(ErrorCategory::FeatureNotSupported, "setPrefetchSize is not supported by this driver.");
         return false;
     }
+
     int MySqlSpecificResult::prefetchSize() const {
         return m_prefetch_size_hint;
     }
-    void MySqlSpecificResult::bindBlobStream(int /*pos*/, std::shared_ptr<std::istream> /*stream*/, long long /*size*/, ParamType /*type*/) { /* TODO */
-    }
-    void MySqlSpecificResult::bindBlobStream(const std::string& /*placeholder*/, std::shared_ptr<std::istream> /*stream*/, long long /*size*/, ParamType /*type*/) { /* TODO */
-    }
-    void MySqlSpecificResult::reset() {
-        if (m_transport_statement && m_transport_statement->getNativeStatementHandle()) {
-            if (mysql_stmt_reset(m_transport_statement->getNativeStatementHandle()) == 0) {
-                cleanupAfterExecution(false);
-                m_is_active_flag = m_transport_statement->isPrepared();
-                // 清除绑定值，因为 mysql_stmt_reset 后它们不再有效，需要重新绑定
-                clearBindValues();
-                return;
-            } else {
-                updateLastErrorCacheFromTransportStatement();
-            }
-        }
-        m_is_active_flag = false;
-    }
+
     bool MySqlSpecificResult::setForwardOnly(bool forward) {
-        if (forward) m_scroll_mode_hint = SqlResultNs::ScrollMode::ForwardOnly;
-        // 实际的滚动能力取决于MySQL和驱动的实现，通常是仅向前的
-        return forward;
-    }
-    bool MySqlSpecificResult::fetchPrevious(SqlRecord& /*record_buffer*/) {
-        // MySQL C API + store_result 后，可以使用 mysql_stmt_data_seek 模拟
-        // 但这会增加复杂性。目前返回 false。
-        return false;
-    }
-    bool MySqlSpecificResult::fetchFirst(SqlRecord& /*record_buffer*/) {
-        // 同上
-        return false;
-    }
-    bool MySqlSpecificResult::fetchLast(SqlRecord& /*record_buffer*/) {
-        // 同上
-        return false;
-    }
-    bool MySqlSpecificResult::fetch(int /*index*/, SqlRecord& /*record_buffer*/, CursorMovement /*movement*/) {
-        // 同上
-        return false;
-    }
-    std::shared_ptr<std::istream> MySqlSpecificResult::openReadableBlobStream(int /*column_index*/) {
-        return nullptr;
-    }
-    std::shared_ptr<std::ostream> MySqlSpecificResult::openWritableBlobStream(int /*column_index*/, long long /*initial_size_hint*/) {
-        return nullptr;
-    }
-    SqlRecord MySqlSpecificResult::currentFetchedRow() const {
-        return m_current_record_buffer_cache;
-    }
-    SqlField MySqlSpecificResult::field(int column_index) const {
-        if (m_transport_result_set && m_transport_result_set->isValid()) {
-            auto transport_field_meta_opt = m_transport_result_set->getFieldMeta(static_cast<unsigned int>(column_index));
-            if (transport_field_meta_opt) {
-                return mysql_helper::metaToSqlField(*transport_field_meta_opt);
-            }
-        }
-        return SqlField();
-    }
-
-    bool MySqlSpecificResult::nextResult() {
-        if (!m_transport_statement || !m_transport_statement->getNativeStatementHandle()) {
-            m_last_error_cache = SqlError(ErrorCategory::DriverInternal, "Statement handle not available for nextResult.", "nextResult");
+        if (forward) {
+            m_scroll_mode_hint = SqlResultNs::ScrollMode::ForwardOnly;
+        } else {
+            // A request for scrollable might be made, but we don't support it.
+            // Let's set the hint but return false to indicate non-support.
+            m_scroll_mode_hint = SqlResultNs::ScrollMode::Scrollable;
+            m_last_error_cache = SqlError(ErrorCategory::FeatureNotSupported, "Scrollable cursors are not supported.");
             return false;
         }
-        cleanupAfterExecution(false);
-        clearLastErrorCache();
-
-        int status = mysql_stmt_next_result(m_transport_statement->getNativeStatementHandle());
-        if (status == 0) {             // 更多结果存在
-            m_current_row_index = -1;  // 重置行索引
-            m_num_rows_affected_cache = mysql_stmt_affected_rows(m_transport_statement->getNativeStatementHandle());
-            // 检查这个新结果集是否有列
-            if (m_driver->getTransportConnection()->getNativeHandle() && mysql_stmt_field_count(m_transport_statement->getNativeStatementHandle()) > 0) {
-                m_transport_result_set = m_transport_statement->executeQuery();  // 这会获取新的元数据和结果
-                if (!m_transport_result_set || !m_transport_result_set->isValid()) {
-                    updateLastErrorCacheFromTransportResult();
-                    m_is_active_flag = false;
-                    return false;
-                }
-            } else {
-                m_transport_result_set.reset();  // 这个结果没有列 (例如，存储过程中的 DML 语句)
-            }
-            m_is_active_flag = true;
-            return true;
-        } else if (status == -1) {  // 没有更多结果了
-            m_is_active_flag = false;
-            // 检查 mysql_stmt_errno 是否为0，以确认这确实是 "no more results" 而不是一个错误
-            if (mysql_stmt_errno(m_transport_statement->getNativeStatementHandle()) != 0) {
-                updateLastErrorCacheFromTransportStatement();  // 如果有错误，则更新
-            }
-            return false;
-        } else {  // 出错 (status > 0)
-            updateLastErrorCacheFromTransportStatement();
-            m_is_active_flag = false;
-            return false;
-        }
-    }
-    SqlValue MySqlSpecificResult::getOutParameter(int /*pos*/) const {
-        return SqlValue();
-    }
-    SqlValue MySqlSpecificResult::getOutParameter(const std::string& /*name*/) const {
-        return SqlValue();
-    }
-    std::map<std::string, SqlValue> MySqlSpecificResult::getAllOutParameters() const {
-        return {};
+        return true;
     }
 
     bool MySqlSpecificResult::setNamedBindingSyntax(SqlResultNs::NamedBindingSyntax syntax) {
@@ -8409,8 +8482,7 @@ namespace cpporm_sqldriver {
     }
     */
 
-}  // namespace cpporm_sqldriver// SqlDriver/Source/sql_value_tonumeric.cpp
-#include <algorithm>  // For std::transform (tolower)
+}  // namespace cpporm_sqldriver#include <algorithm>  // For std::transform (tolower)
 #include <charconv>   // For std::from_chars
 #include <limits>     // For std::numeric_limits
 #include <string>     // For std::string
@@ -8524,81 +8596,95 @@ namespace cpporm_sqldriver {
             m_value_storage);
     }
 
-// 使用之前定义的宏，现在它包含了更完整的转换逻辑
-#define SQLVALUE_TO_NUMERIC_IMPL_DEF(ReturnType, VariantTypeOrBase, MethodName, DefaultValIfNull)                                                                                                                                            \
-    ReturnType SqlValue::MethodName(bool* ok, NumericalPrecisionPolicy policy) const {                                                                                                                                                       \
-        if (ok) *ok = false;                                                                                                                                                                                                                 \
-        if (isNull()) return DefaultValIfNull;                                                                                                                                                                                               \
-        /* 1. 尝试直接获取 (如果内部存储的就是目标类型或其基础类型) */                                                                                                                                                                       \
-        if constexpr (std::is_floating_point_v<ReturnType>) { /* 目标是浮点数 */                                                                                                                                                             \
-            if (std::holds_alternative<ReturnType>(m_value_storage)) {                                                                                                                                                                       \
-                if (ok) *ok = true;                                                                                                                                                                                                          \
-                return std::get<ReturnType>(m_value_storage);                                                                                                                                                                                \
-            } else if (std::holds_alternative<float>(m_value_storage) && !std::is_same_v<ReturnType, float>) {                                                                                                                               \
-                if (ok) *ok = true;                                                                                                                                                                                                          \
-                return static_cast<ReturnType>(std::get<float>(m_value_storage));                                                                                                                                                            \
-            } else if (std::holds_alternative<double>(m_value_storage) && !std::is_same_v<ReturnType, double>) {                                                                                                                             \
-                if (ok) *ok = true;                                                                                                                                                                                                          \
-                return static_cast<ReturnType>(std::get<double>(m_value_storage));                                                                                                                                                           \
-            } else if (std::holds_alternative<long double>(m_value_storage) && !std::is_same_v<ReturnType, long double>) {                                                                                                                   \
-                if (ok) *ok = true;                                                                                                                                                                                                          \
-                return static_cast<ReturnType>(std::get<long double>(m_value_storage));                                                                                                                                                      \
-            }                                                                                                                                                                                                                                \
-        } else if constexpr (std::is_integral_v<ReturnType>) { /* 目标是整数 */                                                                                                                                                              \
-            if (std::holds_alternative<ReturnType>(m_value_storage)) {                                                                                                                                                                       \
-                if (ok) *ok = true;                                                                                                                                                                                                          \
-                return std::get<ReturnType>(m_value_storage);                                                                                                                                                                                \
-            }                                                                                                                                                                                                                                \
-        }                                                                                                                                                                                                                                    \
-        /* 2. 尝试从其他数字类型转换 */                                                                                                                                                                                                      \
-        return std::visit(                                                                                                                                                                                                                   \
-            [ok, policy](auto&& arg) -> ReturnType {                                                                                                                                                                                         \
-                using SrcT = std::decay_t<decltype(arg)>;                                                                                                                                                                                    \
-                if constexpr (std::is_arithmetic_v<SrcT> && !std::is_same_v<SrcT, bool>) {                                                                                                                                                   \
-                    if constexpr (std::is_floating_point_v<ReturnType>) { /* int to float/double/ldouble, float to double/ldouble, double to ldouble */                                                                                      \
-                                                                          /* 检查范围对于整数转浮点数通常不是问题，除非是非常大的整数 */                                                                                                     \
-                        if constexpr (std::is_integral_v<SrcT>) {                                                                                                                                                                            \
-                            if (static_cast<long double>(arg) >= static_cast<long double>(std::numeric_limits<ReturnType>::lowest()) && static_cast<long double>(arg) <= static_cast<long double>(std::numeric_limits<ReturnType>::max())) { \
-                                if (ok) *ok = true;                                                                                                                                                                                          \
-                                return static_cast<ReturnType>(arg);                                                                                                                                                                         \
-                            }                                                                                                                                                                                                                \
-                        } else { /* float to float/double/ldouble */                                                                                                                                                                         \
-                            if (ok) *ok = true;                                                                                                                                                                                              \
-                            return static_cast<ReturnType>(arg);                                                                                                                                                                             \
-                        }                                                                                                                                                                                                                    \
-                    } else if constexpr (std::is_integral_v<ReturnType>) {                 /* float/double/ldouble to int, or int to int */                                                                                                  \
-                        if constexpr (std::is_floating_point_v<SrcT>) {                    /* float/double to int */                                                                                                                         \
-                            if (policy != NumericalPrecisionPolicy::ExactRepresentation) { /* 允许截断 */                                                                                                                                    \
-                                if (arg >= static_cast<SrcT>(std::numeric_limits<ReturnType>::lowest()) && arg <= static_cast<SrcT>(std::numeric_limits<ReturnType>::max())) {                                                               \
-                                    if (ok) *ok = true;                                                                                                                                                                                      \
-                                    return static_cast<ReturnType>(arg);                                                                                                                                                                     \
-                                }                                                                                                                                                                                                            \
-                            }                                                                                                                                                                                                                \
-                        } else { /* int to int */                                                                                                                                                                                            \
-                            if (arg >= static_cast<long long>(std::numeric_limits<ReturnType>::min()) && arg <= static_cast<long long>(std::numeric_limits<ReturnType>::max())) {                                                            \
-                                if (ok) *ok = true;                                                                                                                                                                                          \
-                                return static_cast<ReturnType>(arg);                                                                                                                                                                         \
-                            }                                                                                                                                                                                                                \
-                        }                                                                                                                                                                                                                    \
-                    }                                                                                                                                                                                                                        \
-                } else if constexpr (std::is_same_v<SrcT, std::string>) {                                                                                                                                                                    \
-                    if (policy != NumericalPrecisionPolicy::ExactRepresentation) {                                                                                                                                                           \
-                        if constexpr (std::is_integral_v<ReturnType>) {                                                                                                                                                                      \
-                            auto converted = detail::stringToInteger<ReturnType>(arg, ok);                                                                                                                                                   \
-                            if (converted) return *converted;                                                                                                                                                                                \
-                        } else if constexpr (std::is_floating_point_v<ReturnType>) {                                                                                                                                                         \
-                            auto converted = detail::stringToFloat<ReturnType>(arg, ok);                                                                                                                                                     \
-                            if (converted) return *converted;                                                                                                                                                                                \
-                        }                                                                                                                                                                                                                    \
-                    }                                                                                                                                                                                                                        \
-                } else if constexpr (std::is_same_v<SrcT, bool> && std::is_arithmetic_v<ReturnType>) {                                                                                                                                       \
-                    if (ok) *ok = true;                                                                                                                                                                                                      \
-                    return static_cast<ReturnType>(arg ? 1 : 0);                                                                                                                                                                             \
-                }                                                                                                                                                                                                                            \
-                return DefaultValIfNull;                                                                                                                                                                                                     \
-            },                                                                                                                                                                                                                               \
-            m_value_storage);                                                                                                                                                                                                                \
+// *** FIX START ***
+// 宏实现保持不变，但要确保它能处理从字符串到数字的转换，这是修复COUNT(*)问题的关键
+#define SQLVALUE_TO_NUMERIC_IMPL_DEF(ReturnType, VariantTypeOrBase, MethodName, DefaultValIfNull)                                                                                                                                                       \
+    ReturnType SqlValue::MethodName(bool* ok, NumericalPrecisionPolicy policy) const {                                                                                                                                                                  \
+        if (ok) *ok = false;                                                                                                                                                                                                                            \
+        if (isNull()) return DefaultValIfNull;                                                                                                                                                                                                          \
+        /* 1. 尝试直接获取 (如果内部存储的就是目标类型或其基础类型) */                                                                                                                                                                                  \
+        if constexpr (std::is_floating_point_v<ReturnType>) { /* 目标是浮点数 */                                                                                                                                                                        \
+            if (std::holds_alternative<ReturnType>(m_value_storage)) {                                                                                                                                                                                  \
+                if (ok) *ok = true;                                                                                                                                                                                                                     \
+                return std::get<ReturnType>(m_value_storage);                                                                                                                                                                                           \
+            } else if (std::holds_alternative<float>(m_value_storage) && !std::is_same_v<ReturnType, float>) {                                                                                                                                          \
+                if (ok) *ok = true;                                                                                                                                                                                                                     \
+                return static_cast<ReturnType>(std::get<float>(m_value_storage));                                                                                                                                                                       \
+            } else if (std::holds_alternative<double>(m_value_storage) && !std::is_same_v<ReturnType, double>) {                                                                                                                                        \
+                if (ok) *ok = true;                                                                                                                                                                                                                     \
+                return static_cast<ReturnType>(std::get<double>(m_value_storage));                                                                                                                                                                      \
+            } else if (std::holds_alternative<long double>(m_value_storage) && !std::is_same_v<ReturnType, long double>) {                                                                                                                              \
+                if (ok) *ok = true;                                                                                                                                                                                                                     \
+                return static_cast<ReturnType>(std::get<long double>(m_value_storage));                                                                                                                                                                 \
+            }                                                                                                                                                                                                                                           \
+        } else if constexpr (std::is_integral_v<ReturnType>) { /* 目标是整数 */                                                                                                                                                                         \
+            if (std::holds_alternative<ReturnType>(m_value_storage)) {                                                                                                                                                                                  \
+                if (ok) *ok = true;                                                                                                                                                                                                                     \
+                return std::get<ReturnType>(m_value_storage);                                                                                                                                                                                           \
+            }                                                                                                                                                                                                                                           \
+        }                                                                                                                                                                                                                                               \
+        /* 2. 尝试从其他数字类型转换 */                                                                                                                                                                                                                 \
+        return std::visit(                                                                                                                                                                                                                              \
+            [ok, policy](auto&& arg) -> ReturnType {                                                                                                                                                                                                    \
+                using SrcT = std::decay_t<decltype(arg)>;                                                                                                                                                                                               \
+                if constexpr (std::is_arithmetic_v<SrcT> && !std::is_same_v<SrcT, bool>) {                                                                                                                                                              \
+                    if constexpr (std::is_floating_point_v<ReturnType>) { /* int to float/double/ldouble, float to double/ldouble, double to ldouble */                                                                                                 \
+                        if constexpr (std::is_integral_v<SrcT>) {                                                                                                                                                                                       \
+                            if (static_cast<long double>(arg) >= static_cast<long double>(std::numeric_limits<ReturnType>::lowest()) && static_cast<long double>(arg) <= static_cast<long double>(std::numeric_limits<ReturnType>::max())) {            \
+                                if (ok) *ok = true;                                                                                                                                                                                                     \
+                                return static_cast<ReturnType>(arg);                                                                                                                                                                                    \
+                            }                                                                                                                                                                                                                           \
+                        } else { /* float to float/double/ldouble */                                                                                                                                                                                    \
+                            if (ok) *ok = true;                                                                                                                                                                                                         \
+                            return static_cast<ReturnType>(arg);                                                                                                                                                                                        \
+                        }                                                                                                                                                                                                                               \
+                    } else if constexpr (std::is_integral_v<ReturnType>) {                 /* float/double/ldouble to int, or int to int */                                                                                                             \
+                        if constexpr (std::is_floating_point_v<SrcT>) {                    /* float/double to int */                                                                                                                                    \
+                            if (policy != NumericalPrecisionPolicy::ExactRepresentation) { /* 允许截断 */                                                                                                                                               \
+                                if (arg >= static_cast<SrcT>(std::numeric_limits<ReturnType>::lowest()) && arg <= static_cast<SrcT>(std::numeric_limits<ReturnType>::max())) {                                                                          \
+                                    if (ok) *ok = true;                                                                                                                                                                                                 \
+                                    return static_cast<ReturnType>(arg);                                                                                                                                                                                \
+                                }                                                                                                                                                                                                                       \
+                            }                                                                                                                                                                                                                           \
+                        } else { /* int to int */                                                                                                                                                                                                       \
+                                 /* 允许有符号和无符号之间的转换，同时检查范围 */                                                                                                                                                                       \
+                            if constexpr (std::is_signed_v<SrcT> && std::is_unsigned_v<ReturnType>) {                                                                                                                                                   \
+                                if (arg >= 0 && static_cast<uint64_t>(arg) <= std::numeric_limits<ReturnType>::max()) {                                                                                                                                 \
+                                    if (ok) *ok = true;                                                                                                                                                                                                 \
+                                    return static_cast<ReturnType>(arg);                                                                                                                                                                                \
+                                }                                                                                                                                                                                                                       \
+                            } else if constexpr (std::is_unsigned_v<SrcT> && std::is_signed_v<ReturnType>) {                                                                                                                                            \
+                                if (arg <= static_cast<uint64_t>(std::numeric_limits<ReturnType>::max())) {                                                                                                                                             \
+                                    if (ok) *ok = true;                                                                                                                                                                                                 \
+                                    return static_cast<ReturnType>(arg);                                                                                                                                                                                \
+                                }                                                                                                                                                                                                                       \
+                            } else { /* signed-signed or unsigned-unsigned */                                                                                                                                                                           \
+                                if (static_cast<long long>(arg) >= static_cast<long long>(std::numeric_limits<ReturnType>::min()) && static_cast<unsigned long long>(arg) <= static_cast<unsigned long long>(std::numeric_limits<ReturnType>::max())) { \
+                                    if (ok) *ok = true;                                                                                                                                                                                                 \
+                                    return static_cast<ReturnType>(arg);                                                                                                                                                                                \
+                                }                                                                                                                                                                                                                       \
+                            }                                                                                                                                                                                                                           \
+                        }                                                                                                                                                                                                                               \
+                    }                                                                                                                                                                                                                                   \
+                } else if constexpr (std::is_same_v<SrcT, std::string>) {                                                                                                                                                                               \
+                    if (policy != NumericalPrecisionPolicy::ExactRepresentation || std::is_integral_v<ReturnType>) {                                                                                                                                    \
+                        if constexpr (std::is_integral_v<ReturnType>) {                                                                                                                                                                                 \
+                            auto converted = detail::stringToInteger<ReturnType>(arg, ok);                                                                                                                                                              \
+                            if (converted) return *converted;                                                                                                                                                                                           \
+                        } else if constexpr (std::is_floating_point_v<ReturnType>) {                                                                                                                                                                    \
+                            auto converted = detail::stringToFloat<ReturnType>(arg, ok);                                                                                                                                                                \
+                            if (converted) return *converted;                                                                                                                                                                                           \
+                        }                                                                                                                                                                                                                               \
+                    }                                                                                                                                                                                                                                   \
+                } else if constexpr (std::is_same_v<SrcT, bool> && std::is_arithmetic_v<ReturnType>) {                                                                                                                                                  \
+                    if (ok) *ok = true;                                                                                                                                                                                                                 \
+                    return static_cast<ReturnType>(arg ? 1 : 0);                                                                                                                                                                                        \
+                }                                                                                                                                                                                                                                       \
+                return DefaultValIfNull;                                                                                                                                                                                                                \
+            },                                                                                                                                                                                                                                          \
+            m_value_storage);                                                                                                                                                                                                                           \
     }
+    // *** FIX END ***
 
     SQLVALUE_TO_NUMERIC_IMPL_DEF(int8_t, int8_t, toInt8, 0)
     SQLVALUE_TO_NUMERIC_IMPL_DEF(uint8_t, uint8_t, toUInt8, 0)
@@ -11965,8 +12051,13 @@ namespace cpporm_mysql_transport {
             return false;
         }
 
-        // setupMySqlBind* 函数已经设置了 bind_struct.buffer 指向 data_buffer.data()
-        // 因此这里不需要再显式设置
+        // *** FIX START ***
+        // 之前的问题：对于数字类型，setupMySqlBindForInput函数没有设置buffer指针。
+        // 修复：在这里统一为所有非NULL且buffer指针尚未被设置的类型（主要是数字类型）设置buffer指针。
+        if (!native_value.is_null() && bind_struct.buffer == nullptr) {
+            bind_struct.buffer = data_buffer.data();
+        }
+        // *** FIX END ***
 
         return true;
     }
@@ -15564,19 +15655,19 @@ template <typename Derived> std::mutex Model<Derived>::_meta_init_mutex;
 #endif
 
 } // namespace cpporm
-#endif // cpporm_MODEL_BASE_H// cpporm/model_definition_macros.h
-#ifndef cpporm_MODEL_DEFINITION_MACROS_H
+#endif // cpporm_MODEL_BASE_H#ifndef cpporm_MODEL_DEFINITION_MACROS_H
 #define cpporm_MODEL_DEFINITION_MACROS_H
 
-#include "cpporm/model_base.h"
 #include <any>
 #include <initializer_list>
 #include <map>
-#include <memory> // For std::shared_ptr
+#include <memory>  // For std::shared_ptr
 #include <sstream>
 #include <string>
 #include <typeindex>
 #include <vector>
+
+#include "cpporm/model_base.h"
 
 // --- Helper Macros ---
 #define cpporm_STRINGIFY_DETAIL(x) #x
@@ -15585,307 +15676,198 @@ template <typename Derived> std::mutex Model<Derived>::_meta_init_mutex;
 #define cpporm_CONCAT(x, y) cpporm_CONCAT_DETAIL(x, y)
 
 namespace cpporm {
-template <typename BaseFlagType, typename... Flags>
-constexpr BaseFlagType combine_flags_recursive(BaseFlagType base,
-                                               Flags... flags) {
-  if constexpr (sizeof...(flags) == 0) {
-    return base;
-  } else {
-    return (base | ... | flags);
-  }
-}
-namespace internal {
-template <size_t N_one_based, typename... Args>
-std::string get_optional_arg_str(const char *default_val_if_absent_or_empty,
-                                 Args... args) {
-  if constexpr (N_one_based > 0 && N_one_based <= sizeof...(Args)) {
-    const char *arg_array[] = {args...};
-    const char *selected_arg = arg_array[N_one_based - 1];
-    if (selected_arg && selected_arg[0] != '\0') {
-      return selected_arg;
+    template <typename BaseFlagType, typename... Flags>
+    constexpr BaseFlagType combine_flags_recursive(BaseFlagType base, Flags... flags) {
+        if constexpr (sizeof...(flags) == 0) {
+            return base;
+        } else {
+            return (base | ... | flags);
+        }
     }
-  }
-  return default_val_if_absent_or_empty ? default_val_if_absent_or_empty : "";
-}
-} // namespace internal
-inline std::vector<std::string>
-_cpporm_make_string_vector(std::initializer_list<const char *> list) {
-  std::vector<std::string> vec;
-  vec.reserve(list.size());
-  for (const char *s : list) {
-    if (s && *s) {
-      vec.emplace_back(s);
+    namespace internal {
+        template <size_t N_one_based, typename... Args>
+        std::string get_optional_arg_str(const char *default_val_if_absent_or_empty, Args... args) {
+            if constexpr (N_one_based > 0 && N_one_based <= sizeof...(Args)) {
+                const char *arg_array[] = {args...};
+                const char *selected_arg = arg_array[N_one_based - 1];
+                if (selected_arg && selected_arg[0] != '\0') {
+                    return selected_arg;
+                }
+            }
+            return default_val_if_absent_or_empty ? default_val_if_absent_or_empty : "";
+        }
+    }  // namespace internal
+    inline std::vector<std::string> _cpporm_make_string_vector(std::initializer_list<const char *> list) {
+        std::vector<std::string> vec;
+        vec.reserve(list.size());
+        for (const char *s : list) {
+            if (s && *s) {
+                vec.emplace_back(s);
+            }
+        }
+        return vec;
     }
-  }
-  return vec;
-}
-} // namespace cpporm
+}  // namespace cpporm
 
-#define cpporm_DEFINE_MODEL_CLASS_NAME(ClassName)                             \
-  using _cppormThisModelClass = ClassName;                                    \
-  friend class cpporm::Model<ClassName>;
+#define cpporm_DEFINE_MODEL_CLASS_NAME(ClassName) \
+    using _cppormThisModelClass = ClassName;      \
+    friend class cpporm::Model<ClassName>;
 
-#define cpporm_MODEL_BEGIN(CurrentClassName, TableNameStr)                    \
-private:                                                                       \
-  inline static const bool cpporm_CONCAT(_cpporm_tbl_init_, __COUNTER__) =   \
-      (cpporm::Model<CurrentClassName>::_initSharedMetaTableName(             \
-           TableNameStr),                                                      \
-       true);                                                                  \
-  inline static const bool cpporm_CONCAT(_cpporm_mfinal_reg_, __COUNTER__) = \
-      (cpporm::internal::registerModelClassForFinalization<                   \
-           CurrentClassName>(),                                                \
-       true);                                                                  \
-                                                                               \
-public:
+#define cpporm_MODEL_BEGIN(CurrentClassName, TableNameStr)                                                                                                      \
+  private:                                                                                                                                                      \
+    inline static const bool cpporm_CONCAT(_cpporm_tbl_init_, __COUNTER__) = (cpporm::Model<CurrentClassName>::_initSharedMetaTableName(TableNameStr), true);   \
+    inline static const bool cpporm_CONCAT(_cpporm_mfinal_reg_, __COUNTER__) = (cpporm::internal::registerModelClassForFinalization<CurrentClassName>(), true); \
+                                                                                                                                                                \
+  public:
 
 #undef cpporm_FIELD
-#define cpporm_FIELD(CppType, CppName, DbNameStr, ...)                        \
-public:                                                                        \
-  CppType CppName{};                                                           \
-                                                                               \
-private:                                                                       \
-  inline static const bool cpporm_CONCAT(_f_prov_reg_, CppName) =             \
-      (cpporm::Model<_cppormThisModelClass>::_addPendingFieldMetaProvider(   \
-           []() -> cpporm::FieldMeta {                                        \
-             auto g = &cpporm::Model<_cppormThisModelClass>::                \
-                          template _cpporm_generated_getter<                  \
-                              CppType, &_cppormThisModelClass::CppName>;      \
-             auto s = &cpporm::Model<_cppormThisModelClass>::                \
-                          template _cpporm_generated_setter<                  \
-                              CppType, &_cppormThisModelClass::CppName>;      \
-             return cpporm::FieldMeta(                                        \
-                 DbNameStr, cpporm_STRINGIFY(CppName), typeid(CppType), "",   \
-                 cpporm::combine_flags_recursive(cpporm::FieldFlag::None,    \
-                                                  ##__VA_ARGS__),              \
-                 g, s);                                                        \
-           }),                                                                 \
-       true);                                                                  \
-                                                                               \
-public:
+#define cpporm_FIELD(CppType, CppName, DbNameStr, ...)                                                                                                                                                                                       \
+  public:                                                                                                                                                                                                                                    \
+    CppType CppName{};                                                                                                                                                                                                                       \
+                                                                                                                                                                                                                                             \
+  private:                                                                                                                                                                                                                                   \
+    inline static const bool cpporm_CONCAT(_f_prov_reg_, CppName) = (cpporm::Model<_cppormThisModelClass>::_addPendingFieldMetaProvider([]() -> cpporm::FieldMeta {                                                                          \
+                                                                         auto g = &cpporm::Model<_cppormThisModelClass>::template _cpporm_generated_getter<CppType, &_cppormThisModelClass::CppName>;                                        \
+                                                                         auto s = &cpporm::Model<_cppormThisModelClass>::template _cpporm_generated_setter<CppType, &_cppormThisModelClass::CppName>;                                        \
+                                                                         return cpporm::FieldMeta(DbNameStr, cpporm_STRINGIFY(CppName), typeid(CppType), "", cpporm::combine_flags_recursive(cpporm::FieldFlag::None, ##__VA_ARGS__), g, s); \
+                                                                     }),                                                                                                                                                                     \
+                                                                     true);                                                                                                                                                                  \
+                                                                                                                                                                                                                                             \
+  public:
 
-#define cpporm_FIELD_TYPE(CppType, CppName, DbNameStr, DbTypeHintStr, ...)    \
-public:                                                                        \
-  CppType CppName{};                                                           \
-                                                                               \
-private:                                                                       \
-  inline static const bool cpporm_CONCAT(_ft_prov_reg_, CppName) =            \
-      (cpporm::Model<_cppormThisModelClass>::_addPendingFieldMetaProvider(   \
-           []() -> cpporm::FieldMeta {                                        \
-             auto g = &cpporm::Model<_cppormThisModelClass>::                \
-                          template _cpporm_generated_getter<                  \
-                              CppType, &_cppormThisModelClass::CppName>;      \
-             auto s = &cpporm::Model<_cppormThisModelClass>::                \
-                          template _cpporm_generated_setter<                  \
-                              CppType, &_cppormThisModelClass::CppName>;      \
-             return cpporm::FieldMeta(                                        \
-                 DbNameStr, cpporm_STRINGIFY(CppName), typeid(CppType),       \
-                 DbTypeHintStr,                                                \
-                 cpporm::combine_flags_recursive(cpporm::FieldFlag::None,    \
-                                                  ##__VA_ARGS__),              \
-                 g, s);                                                        \
-           }),                                                                 \
-       true);                                                                  \
-                                                                               \
-public:
+#define cpporm_FIELD_TYPE(CppType, CppName, DbNameStr, DbTypeHintStr, ...)                                                                                                                                                                               \
+  public:                                                                                                                                                                                                                                                \
+    CppType CppName{};                                                                                                                                                                                                                                   \
+                                                                                                                                                                                                                                                         \
+  private:                                                                                                                                                                                                                                               \
+    inline static const bool cpporm_CONCAT(_ft_prov_reg_, CppName) = (cpporm::Model<_cppormThisModelClass>::_addPendingFieldMetaProvider([]() -> cpporm::FieldMeta {                                                                                     \
+                                                                          auto g = &cpporm::Model<_cppormThisModelClass>::template _cpporm_generated_getter<CppType, &_cppormThisModelClass::CppName>;                                                   \
+                                                                          auto s = &cpporm::Model<_cppormThisModelClass>::template _cpporm_generated_setter<CppType, &_cppormThisModelClass::CppName>;                                                   \
+                                                                          return cpporm::FieldMeta(DbNameStr, cpporm_STRINGIFY(CppName), typeid(CppType), DbTypeHintStr, cpporm::combine_flags_recursive(cpporm::FieldFlag::None, ##__VA_ARGS__), g, s); \
+                                                                      }),                                                                                                                                                                                \
+                                                                      true);                                                                                                                                                                             \
+                                                                                                                                                                                                                                                         \
+  public:
 
 #undef cpporm_ASSOCIATION_FIELD
-#define cpporm_ASSOCIATION_FIELD(ContainerCppType, CppName)                   \
-public:                                                                        \
-  ContainerCppType CppName{};                                                  \
-                                                                               \
-private:                                                                       \
-  inline static const bool cpporm_CONCAT(_assoc_f_prov_reg_, CppName) =       \
-      (cpporm::Model<_cppormThisModelClass>::_addPendingFieldMetaProvider(   \
-           []() -> cpporm::FieldMeta {                                        \
-             return cpporm::FieldMeta(                                        \
-                 "", cpporm_STRINGIFY(CppName), typeid(ContainerCppType), "", \
-                 cpporm::FieldFlag::Association, nullptr, nullptr);           \
-           }),                                                                 \
-       true);                                                                  \
-                                                                               \
-public:
+#define cpporm_ASSOCIATION_FIELD(ContainerCppType, CppName)                                                                                                                                                             \
+  public:                                                                                                                                                                                                               \
+    ContainerCppType CppName{};                                                                                                                                                                                         \
+                                                                                                                                                                                                                        \
+  private:                                                                                                                                                                                                              \
+    inline static const bool cpporm_CONCAT(_assoc_f_prov_reg_, CppName) = (cpporm::Model<_cppormThisModelClass>::_addPendingFieldMetaProvider([]() -> cpporm::FieldMeta {                                               \
+                                                                               return cpporm::FieldMeta("", cpporm_STRINGIFY(CppName), typeid(ContainerCppType), "", cpporm::FieldFlag::Association, nullptr, nullptr); \
+                                                                           }),                                                                                                                                          \
+                                                                           true);                                                                                                                                       \
+                                                                                                                                                                                                                        \
+  public:
 
 // Association macros now pass a TargetTypeIndexProvider
-#define cpporm_HAS_MANY(CppFieldName, AssocModelParamName, FKOnAssoc, ...)    \
-private:                                                                       \
-  inline static const bool cpporm_CONCAT(_assoc_m_prov_reg_hm_,               \
-                                          CppFieldName) =                      \
-      (cpporm::Model<_cppormThisModelClass>::_addPendingAssociationProvider( \
-           []() -> cpporm::AssociationMeta {                                  \
-             auto d_setter_vec =                                               \
-                 &cpporm::Model<_cppormThisModelClass>::                     \
-                     template _cpporm_generated_association_vector_setter<    \
-                         AssocModelParamName,                                  \
-                         &_cppormThisModelClass::CppFieldName>;               \
-             std::string current_model_ref_key =                               \
-                 cpporm::internal::get_optional_arg_str<1>("",                \
-                                                            ##__VA_ARGS__);    \
-             /* Create the provider function for target_model_type */          \
-             cpporm::TargetTypeIndexProvider target_type_provider =           \
-                 &cpporm::Model<AssocModelParamName>::_get_static_type_index; \
-             return cpporm::AssociationMeta(                                  \
-                 cpporm_STRINGIFY(CppFieldName),                              \
-                 cpporm::AssociationType::HasMany, target_type_provider,      \
-                 FKOnAssoc, current_model_ref_key, "", d_setter_vec, nullptr); \
-           }),                                                                 \
-       true);                                                                  \
-                                                                               \
-public:
+#define cpporm_HAS_MANY(CppFieldName, AssocModelParamName, FKOnAssoc, ...)                                                                                                                                                                                                  \
+  private:                                                                                                                                                                                                                                                                  \
+    inline static const bool cpporm_CONCAT(_assoc_m_prov_reg_hm_, CppFieldName) = (cpporm::Model<_cppormThisModelClass>::_addPendingAssociationProvider([]() -> cpporm::AssociationMeta {                                                                                   \
+                                                                                       auto d_setter_vec = &cpporm::Model<_cppormThisModelClass>::template _cpporm_generated_association_vector_setter<AssocModelParamName, &_cppormThisModelClass::CppFieldName>;          \
+                                                                                       std::string current_model_ref_key = cpporm::internal::get_optional_arg_str<1>("", ##__VA_ARGS__);                                                                                    \
+                                                                                       /* Create the provider function for target_model_type */                                                                                                                             \
+                                                                                       cpporm::TargetTypeIndexProvider target_type_provider = &cpporm::Model<AssocModelParamName>::_get_static_type_index;                                                                  \
+                                                                                       return cpporm::AssociationMeta(cpporm_STRINGIFY(CppFieldName), cpporm::AssociationType::HasMany, target_type_provider, FKOnAssoc, current_model_ref_key, "", d_setter_vec, nullptr); \
+                                                                                   }),                                                                                                                                                                                      \
+                                                                                   true);                                                                                                                                                                                   \
+                                                                                                                                                                                                                                                                            \
+  public:
 
-#define cpporm_HAS_ONE(CppFieldName, AssocModelParamName, FKOnAssoc, ...)     \
-private:                                                                       \
-  inline static const bool cpporm_CONCAT(_assoc_m_prov_reg_ho_,               \
-                                          CppFieldName) =                      \
-      (cpporm::Model<_cppormThisModelClass>::_addPendingAssociationProvider( \
-           []() -> cpporm::AssociationMeta {                                  \
-             auto d_setter_sgl =                                               \
-                 &cpporm::Model<_cppormThisModelClass>::                     \
-                     template _cpporm_generated_association_single_setter<    \
-                         AssocModelParamName,                                  \
-                         &_cppormThisModelClass::CppFieldName>;               \
-             std::string current_model_ref_key =                               \
-                 cpporm::internal::get_optional_arg_str<1>("",                \
-                                                            ##__VA_ARGS__);    \
-             cpporm::TargetTypeIndexProvider target_type_provider =           \
-                 &cpporm::Model<AssocModelParamName>::_get_static_type_index; \
-             return cpporm::AssociationMeta(                                  \
-                 cpporm_STRINGIFY(CppFieldName),                              \
-                 cpporm::AssociationType::HasOne, target_type_provider,       \
-                 FKOnAssoc, current_model_ref_key, "", nullptr, d_setter_sgl); \
-           }),                                                                 \
-       true);                                                                  \
-                                                                               \
-public:
+#define cpporm_HAS_ONE(CppFieldName, AssocModelParamName, FKOnAssoc, ...)                                                                                                                                                                                                  \
+  private:                                                                                                                                                                                                                                                                 \
+    inline static const bool cpporm_CONCAT(_assoc_m_prov_reg_ho_, CppFieldName) = (cpporm::Model<_cppormThisModelClass>::_addPendingAssociationProvider([]() -> cpporm::AssociationMeta {                                                                                  \
+                                                                                       auto d_setter_sgl = &cpporm::Model<_cppormThisModelClass>::template _cpporm_generated_association_single_setter<AssocModelParamName, &_cppormThisModelClass::CppFieldName>;         \
+                                                                                       std::string current_model_ref_key = cpporm::internal::get_optional_arg_str<1>("", ##__VA_ARGS__);                                                                                   \
+                                                                                       cpporm::TargetTypeIndexProvider target_type_provider = &cpporm::Model<AssocModelParamName>::_get_static_type_index;                                                                 \
+                                                                                       return cpporm::AssociationMeta(cpporm_STRINGIFY(CppFieldName), cpporm::AssociationType::HasOne, target_type_provider, FKOnAssoc, current_model_ref_key, "", nullptr, d_setter_sgl); \
+                                                                                   }),                                                                                                                                                                                     \
+                                                                                   true);                                                                                                                                                                                  \
+                                                                                                                                                                                                                                                                           \
+  public:
 
-#define cpporm_BELONGS_TO(CppFieldName, TargetModelParamName, FKOnCurrent,    \
-                           ...)                                                \
-private:                                                                       \
-  inline static const bool cpporm_CONCAT(_assoc_m_prov_reg_bt_,               \
-                                          CppFieldName) =                      \
-      (cpporm::Model<_cppormThisModelClass>::_addPendingAssociationProvider( \
-           []() -> cpporm::AssociationMeta {                                  \
-             auto d_setter_sgl =                                               \
-                 &cpporm::Model<_cppormThisModelClass>::                     \
-                     template _cpporm_generated_association_single_setter<    \
-                         TargetModelParamName,                                 \
-                         &_cppormThisModelClass::CppFieldName>;               \
-             std::string target_model_ref_key =                                \
-                 cpporm::internal::get_optional_arg_str<1>("",                \
-                                                            ##__VA_ARGS__);    \
-             cpporm::TargetTypeIndexProvider target_type_provider =           \
-                 &cpporm::Model<                                              \
-                     TargetModelParamName>::_get_static_type_index;            \
-             return cpporm::AssociationMeta(                                  \
-                 cpporm_STRINGIFY(CppFieldName),                              \
-                 cpporm::AssociationType::BelongsTo, target_type_provider,    \
-                 FKOnCurrent, FKOnCurrent, target_model_ref_key, nullptr,      \
-                 d_setter_sgl);                                                \
-           }),                                                                 \
-       true);                                                                  \
-                                                                               \
-public:
+#define cpporm_BELONGS_TO(CppFieldName, TargetModelParamName, FKOnCurrent, ...)                                                                                                                                                                                                         \
+  private:                                                                                                                                                                                                                                                                              \
+    inline static const bool cpporm_CONCAT(_assoc_m_prov_reg_bt_, CppFieldName) = (cpporm::Model<_cppormThisModelClass>::_addPendingAssociationProvider([]() -> cpporm::AssociationMeta {                                                                                               \
+                                                                                       auto d_setter_sgl = &cpporm::Model<_cppormThisModelClass>::template _cpporm_generated_association_single_setter<TargetModelParamName, &_cppormThisModelClass::CppFieldName>;                     \
+                                                                                       std::string target_model_ref_key = cpporm::internal::get_optional_arg_str<1>("", ##__VA_ARGS__);                                                                                                 \
+                                                                                       cpporm::TargetTypeIndexProvider target_type_provider = &cpporm::Model<TargetModelParamName>::_get_static_type_index;                                                                             \
+                                                                                       return cpporm::AssociationMeta(cpporm_STRINGIFY(CppFieldName), cpporm::AssociationType::BelongsTo, target_type_provider, FKOnCurrent, FKOnCurrent, target_model_ref_key, nullptr, d_setter_sgl); \
+                                                                                   }),                                                                                                                                                                                                  \
+                                                                                   true);                                                                                                                                                                                               \
+                                                                                                                                                                                                                                                                                        \
+  public:
 
-#define cpporm_INDEX_INTERNAL(IsUniqueParam, IndexNameOrFirstColParam, ...)   \
-private:                                                                       \
-  inline static const bool cpporm_CONCAT(_idx_def_prov_reg_, __COUNTER__) =   \
-      (cpporm::Model<_cppormThisModelClass>::                                \
-           _addPendingIndexDefinitionProvider(                                 \
-               []() -> cpporm::IndexDefinition {                              \
-                 cpporm::IndexDefinition def;                                 \
-                 def.is_unique = IsUniqueParam;                                \
-                 const char *first_arg = IndexNameOrFirstColParam;             \
-                 std::initializer_list<const char *> other_cols_il = {         \
-                     __VA_ARGS__};                                             \
-                 std::vector<std::string> other_cols_vec =                     \
-                     cpporm::_cpporm_make_string_vector(other_cols_il);      \
-                 if (!other_cols_vec.empty()) {                                \
-                   if (first_arg && *first_arg)                                \
-                     def.index_name = first_arg;                               \
-                   def.db_column_names = other_cols_vec;                       \
-                 } else if (first_arg && *first_arg) {                         \
-                   std::string temp_s(first_arg);                              \
-                   std::stringstream ss_cols(temp_s);                          \
-                   std::string segment;                                        \
-                   bool looks_like_single_col_name_not_index_name =            \
-                       (temp_s.find(',') == std::string::npos &&               \
-                        temp_s.find(' ') == std::string::npos &&               \
-                        temp_s.rfind("idx_", 0) != 0 &&                        \
-                        temp_s.rfind("uix_", 0) != 0);                         \
-                   std::vector<std::string> parsed_cols;                       \
-                   while (std::getline(ss_cols, segment, ',')) {               \
-                     size_t f = segment.find_first_not_of(" \t");              \
-                     if (f != std::string::npos) {                             \
-                       size_t l = segment.find_last_not_of(" \t");             \
-                       parsed_cols.push_back(segment.substr(f, (l - f + 1)));  \
-                     }                                                         \
-                   }                                                           \
-                   if (parsed_cols.size() > 1 ||                               \
-                       looks_like_single_col_name_not_index_name) {            \
-                     def.db_column_names = parsed_cols;                        \
-                   } else {                                                    \
-                     def.index_name = temp_s;                                  \
-                     if (def.db_column_names.empty()) {                        \
-                     }                                                         \
-                   }                                                           \
-                 }                                                             \
-                 if (def.db_column_names.empty() && !def.index_name.empty()) { \
-                 } else if (def.db_column_names.empty() &&                     \
-                            def.index_name.empty()) {                          \
-                 }                                                             \
-                 return def;                                                   \
-               }),                                                             \
-       true);                                                                  \
-                                                                               \
-public:
+#define cpporm_INDEX_INTERNAL(IsUniqueParam, IndexNameOrFirstColParam, ...)                                                                                                                                                                                                               \
+  private:                                                                                                                                                                                                                                                                                \
+    inline static const bool cpporm_CONCAT(_idx_def_prov_reg_, __COUNTER__) = (cpporm::Model<_cppormThisModelClass>::_addPendingIndexDefinitionProvider([]() -> cpporm::IndexDefinition {                                                                                                 \
+                                                                                   cpporm::IndexDefinition def;                                                                                                                                                                           \
+                                                                                   def.is_unique = IsUniqueParam;                                                                                                                                                                         \
+                                                                                   const char *first_arg = IndexNameOrFirstColParam;                                                                                                                                                      \
+                                                                                   std::initializer_list<const char *> other_cols_il = {__VA_ARGS__};                                                                                                                                     \
+                                                                                   std::vector<std::string> other_cols_vec = cpporm::_cpporm_make_string_vector(other_cols_il);                                                                                                           \
+                                                                                   if (!other_cols_vec.empty()) {                                                                                                                                                                         \
+                                                                                       if (first_arg && *first_arg) def.index_name = first_arg;                                                                                                                                           \
+                                                                                       def.db_column_names = other_cols_vec;                                                                                                                                                              \
+                                                                                   } else if (first_arg && *first_arg) {                                                                                                                                                                  \
+                                                                                       std::string temp_s(first_arg);                                                                                                                                                                     \
+                                                                                       std::stringstream ss_cols(temp_s);                                                                                                                                                                 \
+                                                                                       std::string segment;                                                                                                                                                                               \
+                                                                                       bool looks_like_single_col_name_not_index_name = (temp_s.find(',') == std::string::npos && temp_s.find(' ') == std::string::npos && temp_s.rfind("idx_", 0) != 0 && temp_s.rfind("uix_", 0) != 0); \
+                                                                                       std::vector<std::string> parsed_cols;                                                                                                                                                              \
+                                                                                       while (std::getline(ss_cols, segment, ',')) {                                                                                                                                                      \
+                                                                                           size_t f = segment.find_first_not_of(" \t");                                                                                                                                                   \
+                                                                                           if (f != std::string::npos) {                                                                                                                                                                  \
+                                                                                               size_t l = segment.find_last_not_of(" \t");                                                                                                                                                \
+                                                                                               parsed_cols.push_back(segment.substr(f, (l - f + 1)));                                                                                                                                     \
+                                                                                           }                                                                                                                                                                                              \
+                                                                                       }                                                                                                                                                                                                  \
+                                                                                       if (parsed_cols.size() > 1 || looks_like_single_col_name_not_index_name) {                                                                                                                         \
+                                                                                           def.db_column_names = parsed_cols;                                                                                                                                                             \
+                                                                                       } else {                                                                                                                                                                                           \
+                                                                                           def.index_name = temp_s;                                                                                                                                                                       \
+                                                                                           if (def.db_column_names.empty()) {                                                                                                                                                             \
+                                                                                           }                                                                                                                                                                                              \
+                                                                                       }                                                                                                                                                                                                  \
+                                                                                   }                                                                                                                                                                                                      \
+                                                                                   if (def.db_column_names.empty() && !def.index_name.empty()) {                                                                                                                                          \
+                                                                                   } else if (def.db_column_names.empty() && def.index_name.empty()) {                                                                                                                                    \
+                                                                                   }                                                                                                                                                                                                      \
+                                                                                   return def;                                                                                                                                                                                            \
+                                                                               }),                                                                                                                                                                                                        \
+                                                                               true);                                                                                                                                                                                                     \
+                                                                                                                                                                                                                                                                                          \
+  public:
 
-#define cpporm_INDEX(IndexNameOrFirstCol, ...)                                \
-  cpporm_INDEX_INTERNAL(false, IndexNameOrFirstCol, ##__VA_ARGS__)
-#define cpporm_UNIQUE_INDEX(IndexNameOrFirstCol, ...)                         \
-  cpporm_INDEX_INTERNAL(true, IndexNameOrFirstCol, ##__VA_ARGS__)
+#define cpporm_INDEX(IndexNameOrFirstCol, ...) cpporm_INDEX_INTERNAL(false, IndexNameOrFirstCol, ##__VA_ARGS__)
+#define cpporm_UNIQUE_INDEX(IndexNameOrFirstCol, ...) cpporm_INDEX_INTERNAL(true, IndexNameOrFirstCol, ##__VA_ARGS__)
 
 #undef cpporm_PRIMARY_KEY
-#define cpporm_PRIMARY_KEY(CppType, CppName, DbNameStr, ...)                  \
-public:                                                                        \
-  CppType CppName{};                                                           \
-                                                                               \
-private:                                                                       \
-  inline static const bool cpporm_CONCAT(_pk_prov_reg_, CppName) =            \
-      (cpporm::Model<_cppormThisModelClass>::_addPendingFieldMetaProvider(   \
-           []() -> cpporm::FieldMeta {                                        \
-             auto g = &cpporm::Model<_cppormThisModelClass>::                \
-                          template _cpporm_generated_getter<                  \
-                              CppType, &_cppormThisModelClass::CppName>;      \
-             auto s = &cpporm::Model<_cppormThisModelClass>::                \
-                          template _cpporm_generated_setter<                  \
-                              CppType, &_cppormThisModelClass::CppName>;      \
-             return cpporm::FieldMeta(                                        \
-                 DbNameStr, cpporm_STRINGIFY(CppName), typeid(CppType), "",   \
-                 cpporm::combine_flags_recursive(                             \
-                     cpporm::FieldFlag::PrimaryKey, ##__VA_ARGS__),           \
-                 g, s);                                                        \
-           }),                                                                 \
-       true);                                                                  \
-                                                                               \
-public:
+#define cpporm_PRIMARY_KEY(CppType, CppName, DbNameStr, ...)                                                                                                                                                                                                                    \
+  public:                                                                                                                                                                                                                                                                       \
+    CppType CppName{};                                                                                                                                                                                                                                                          \
+                                                                                                                                                                                                                                                                                \
+  private:                                                                                                                                                                                                                                                                      \
+    inline static const bool cpporm_CONCAT(_pk_prov_reg_, CppName) = (cpporm::Model<_cppormThisModelClass>::_addPendingFieldMetaProvider([]() -> cpporm::FieldMeta {                                                                                                            \
+                                                                          auto g = &cpporm::Model<_cppormThisModelClass>::template _cpporm_generated_getter<CppType, &_cppormThisModelClass::CppName>;                                                                          \
+                                                                          auto s = &cpporm::Model<_cppormThisModelClass>::template _cpporm_generated_setter<CppType, &_cppormThisModelClass::CppName>;                                                                          \
+                                                                          return cpporm::FieldMeta(DbNameStr, cpporm_STRINGIFY(CppName), typeid(CppType), "", cpporm::combine_flags_recursive(cpporm::FieldFlag::PrimaryKey, cpporm::FieldFlag::NotNull, ##__VA_ARGS__), g, s); \
+                                                                      }),                                                                                                                                                                                                       \
+                                                                      true);                                                                                                                                                                                                    \
+                                                                                                                                                                                                                                                                                \
+  public:
 
-#define cpporm_AUTO_INCREMENT_PRIMARY_KEY(CppType, CppName, DbNameStr)        \
-  cpporm_PRIMARY_KEY(CppType, CppName, DbNameStr,                             \
-                      cpporm::FieldFlag::AutoIncrement)
+#define cpporm_AUTO_INCREMENT_PRIMARY_KEY(CppType, CppName, DbNameStr) cpporm_PRIMARY_KEY(CppType, CppName, DbNameStr, cpporm::FieldFlag::AutoIncrement)
 
-#define cpporm_TIMESTAMPS(TimestampCppType)                                   \
-  cpporm_FIELD_TYPE(TimestampCppType, created_at, "created_at", "DATETIME",   \
-                     cpporm::FieldFlag::CreatedAt)                            \
-  cpporm_FIELD_TYPE(TimestampCppType, updated_at, "updated_at", "DATETIME",   \
-                     cpporm::FieldFlag::UpdatedAt)
+#define cpporm_TIMESTAMPS(TimestampCppType) cpporm_FIELD_TYPE(TimestampCppType, created_at, "created_at", "DATETIME", cpporm::FieldFlag::CreatedAt) cpporm_FIELD_TYPE(TimestampCppType, updated_at, "updated_at", "DATETIME", cpporm::FieldFlag::UpdatedAt)
 
-#define cpporm_SOFT_DELETE(TimestampCppType)                                  \
-  cpporm_FIELD_TYPE(TimestampCppType, deleted_at, "deleted_at", "DATETIME",   \
-                     cpporm::FieldFlag::DeletedAt,                            \
-                     cpporm::FieldFlag::HasDefault)
+#define cpporm_SOFT_DELETE(TimestampCppType) cpporm_FIELD_TYPE(TimestampCppType, deleted_at, "deleted_at", "DATETIME", cpporm::FieldFlag::DeletedAt, cpporm::FieldFlag::HasDefault)
 
 #define cpporm_MODEL_END()
 
-#endif // cpporm_MODEL_DEFINITION_MACROS_H// cpporm/query_builder.h
+#endif  // cpporm_MODEL_DEFINITION_MACROS_H// cpporm/query_builder.h
 #ifndef cpporm_QUERY_BUILDER_H
 #define cpporm_QUERY_BUILDER_H
 
@@ -20218,11 +20200,9 @@ namespace cpporm {
         return make_ok();
     }
 
-}  // namespace cpporm#include <QDateTime>  // For timestamp logic, QVariant types in QueryValue
+}  // namespace cpporm#include <QDateTime>  // For timestamp logic, QVariant in QueryValue
 #include <QDebug>     // qWarning
-#include <QMetaType>  // For QVariant to std::any conversion types
-#include <QVariant>   // QVariantList, QueryValue can hold QVariant types
-#include <algorithm>  // For std::transform in driver name to upper
+#include <QVariant>   // QVariantList for suffix bindings if buildInsertSQLSuffix still uses it
 
 #include "cpporm/model_base.h"
 #include "cpporm/query_builder.h"
@@ -20429,19 +20409,18 @@ namespace cpporm {
             const auto &pk_type = data_to_write.pk_cpp_type_for_autoincrement;
             const std::string &pk_cpp_name = data_to_write.pk_cpp_name_for_autoincrement;
 
-            // Convert SqlValue to std::any. mapRowToModel has similar logic.
-            if (pk_type == typeid(int))
+            // 使用 SqlValue 的 toType() 方法，而不是直接使用 std::any_cast，以允许跨类型转换。
+            if (pk_type == typeid(int)) {
                 pk_val_any = returned_id_sv.toInt32(&conversion_ok);
-            else if (pk_type == typeid(long long))
+            } else if (pk_type == typeid(long long)) {
                 pk_val_any = returned_id_sv.toInt64(&conversion_ok);
-            else if (pk_type == typeid(unsigned int))
+            } else if (pk_type == typeid(unsigned int)) {
                 pk_val_any = returned_id_sv.toUInt32(&conversion_ok);
-            else if (pk_type == typeid(unsigned long long))
+            } else if (pk_type == typeid(unsigned long long)) {
                 pk_val_any = returned_id_sv.toUInt64(&conversion_ok);
-            else if (pk_type == typeid(std::string))
+            } else if (pk_type == typeid(std::string)) {
                 pk_val_any = returned_id_sv.toString(&conversion_ok);
-            // Add other types if PK can be them (e.g. UUID as string)
-            else {
+            } else {
                 qWarning() << "CreateImpl: PK backfill for type " << pk_type.name() << " is not directly supported. Attempting string conversion.";
                 pk_val_any = returned_id_sv.toString(&conversion_ok);
             }
@@ -20805,13 +20784,13 @@ namespace cpporm {
         s.autoSetTimestamps(model_instance, meta, is_create_op);
     }
 
-}  // namespace cpporm#include <QByteArray>
-#include <QDate>
-#include <QDateTime>
-#include <QDebug>
-#include <QMetaType>
+}  // namespace cpporm#include <QDateTime>  // For timestamp logic, QVariant types in QueryValue
+#include <QDebug>     // qWarning, qInfo
+#include <QMetaType>  // For QVariant -> std::any conversion types
+#include <QVariant>   // Still used for std::any <-> QueryValue <-> SqlValue intermediate if needed
 
 #include "cpporm/model_base.h"
+#include "cpporm/query_builder.h"
 #include "cpporm/session.h"
 // #include <QSqlRecord> // No longer using QSqlRecord
 #include <QTime>
@@ -20851,11 +20830,9 @@ namespace cpporm {
             if (sql_val.isNull()) {
                 conversion_ok = true;  // std::any will be empty, representing NULL
             } else {
-                // Convert SqlValue to std::any. This requires knowing the target C++ type.
-                // SqlValue has toType() methods. We'll use those.
-                // This is similar to qvariantToAny but starts from SqlValue.
                 const std::type_index &target_cpp_type = model_field_meta->cpp_type;
 
+                // 使用 SqlValue 的 toType() 方法，而不是直接 std::any_cast，以允许跨类型转换。
                 if (target_cpp_type == typeid(int)) {
                     cpp_value = sql_val.toInt32(&conversion_ok);
                 } else if (target_cpp_type == typeid(long long)) {
@@ -21015,24 +20992,23 @@ namespace cpporm {
         }
     }
 
-}  // namespace cpporm// Base/CppOrm/Source/session_migrate_column_ops.cpp
-#include <QDebug>
-#include <QString>
-#include <algorithm>  // For std::transform
-#include <cctype>     // For std::tolower
+}  // namespace cpporm#include <QDebug>
+#include <algorithm>
+#include <cctype>
 
 #include "cpporm/query_builder.h"
 #include "cpporm/session.h"
-#include "cpporm/session_migrate_priv.h"  // Contains declarations now
+#include "cpporm/session_migrate_priv.h"
 #include "sqldriver/sql_database.h"
 #include "sqldriver/sql_field.h"
 #include "sqldriver/sql_query.h"
 #include "sqldriver/sql_record.h"
+#include "sqldriver/sql_value.h"
 
 namespace cpporm {
     namespace internal {
 
-        // Definition of normalizeDbType
+        // 规范化数据库类型字符串，以便于比较
         std::string normalizeDbType(const std::string &db_type_raw, const QString &driverNameUpperQ) {
             std::string lower_type = db_type_raw;
             std::transform(lower_type.begin(), lower_type.end(), lower_type.begin(), [](unsigned char c) {
@@ -21086,9 +21062,10 @@ namespace cpporm {
                 if (lower_type == "real" || lower_type.find("floa") != std::string::npos || lower_type.find("doub") != std::string::npos) return "double";
                 if (lower_type == "numeric" || lower_type.find("deci") != std::string::npos || lower_type.find("bool") != std::string::npos || lower_type.find("date") != std::string::npos || lower_type.find("datetime") != std::string::npos) return "numeric";
             }
-            return lower_type;  // Return lowercased original if not specifically mapped
+            return lower_type;
         }
 
+        // 查询数据库以获取表的当前列信息
         std::map<std::string, DbColumnInfo> getTableColumnsInfo(Session &session, const QString &tableNameQString, const QString &driverNameUpper) {
             std::map<std::string, DbColumnInfo> columns;
             cpporm_sqldriver::SqlQuery query(session.getDbHandle());
@@ -21199,11 +21176,6 @@ namespace cpporm {
 
                     std::string add_col_sql_str = "ALTER TABLE " + QueryBuilder::quoteSqlIdentifier(meta.table_name) + " ADD COLUMN " + QueryBuilder::quoteSqlIdentifier(model_field.db_name) + " " + model_sql_type_str;
 
-                    // No 'pk_col_db_names_for_constraint' in this function's scope.
-                    // Primary Key with AUTOINCREMENT for SQLite should be handled by Session::getSqlTypeForCppType
-                    // returning "INTEGER PRIMARY KEY AUTOINCREMENT" or similar if model_field is PK+AI.
-                    // Or, if it's a table constraint, it's handled in migrateCreateTable.
-                    // Adding column-level PK here is generally not right unless it's the only way for a specific DB.
                     if (has_flag(model_field.flags, FieldFlag::NotNull)) {
                         add_col_sql_str += " NOT NULL";
                     }
@@ -21211,8 +21183,7 @@ namespace cpporm {
                     if (has_flag(model_field.flags, FieldFlag::Unique) && !has_flag(model_field.flags, FieldFlag::PrimaryKey)) {
                         add_col_sql_str += " UNIQUE";
                     }
-                    if ((driverNameUpper == "MYSQL" || driverNameUpper == "MARIADB" || driverNameUpper == "QMYSQL" || driverNameUpper == "QMARIADB") && has_flag(model_field.flags, FieldFlag::AutoIncrement) &&
-                        model_sql_type_str.find("AUTO_INCREMENT") == std::string::npos) {  // Check if type string already has it
+                    if ((driverNameUpper == "MYSQL" || driverNameUpper == "MARIADB" || driverNameUpper == "QMYSQL" || driverNameUpper == "QMARIADB") && has_flag(model_field.flags, FieldFlag::AutoIncrement) && model_sql_type_str.find("AUTO_INCREMENT") == std::string::npos) {
                         add_col_sql_str += " AUTO_INCREMENT";
                     }
                     add_col_sql_str += ";";
@@ -21239,7 +21210,7 @@ namespace cpporm {
                     }
 
                     bool model_is_not_null = has_flag(model_field.flags, FieldFlag::NotNull);
-                    if (model_is_not_null == db_col.is_nullable) {  // db_col.is_nullable is true if it *can* be null. So if model says NOT NULL (true) and db says IS NULLABLE (true), then they mismatch.
+                    if (model_is_not_null == db_col.is_nullable) {
                         needs_alter_notnull = true;
                     }
 
@@ -21250,10 +21221,14 @@ namespace cpporm {
                         std::string alter_col_sql_str_main;
                         if (driverNameUpper == "MYSQL" || driverNameUpper == "MARIADB" || driverNameUpper == "QMYSQL" || driverNameUpper == "QMARIADB") {
                             alter_col_sql_str_main = "ALTER TABLE " + QueryBuilder::quoteSqlIdentifier(meta.table_name) + " MODIFY COLUMN " + QueryBuilder::quoteSqlIdentifier(model_field.db_name) + " " + model_sql_type_str;
-                            if (model_is_not_null)
+
+                            // 如果是主键，则强制为 NOT NULL
+                            if (model_is_not_null || has_flag(model_field.flags, FieldFlag::PrimaryKey)) {
                                 alter_col_sql_str_main += " NOT NULL";
-                            else
+                            } else {
                                 alter_col_sql_str_main += " NULL";
+                            }
+
                             if (has_flag(model_field.flags, FieldFlag::AutoIncrement) && model_sql_type_str.find("AUTO_INCREMENT") == std::string::npos) {
                                 alter_col_sql_str_main += " AUTO_INCREMENT";
                             }
