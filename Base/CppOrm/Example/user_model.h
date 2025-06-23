@@ -7,24 +7,28 @@
 #include "cpporm/model_definition_macros.h"
 
 class User : public cpporm::Model<User> {
-  cpporm_DEFINE_MODEL_CLASS_NAME(User)
+    cpporm_DEFINE_MODEL_CLASS_NAME(User);
 
-      public :
-      // FIX: Changed from long long to int64_t for better type portability and to fix bad_any_cast issues.
-      cpporm_AUTO_INCREMENT_PRIMARY_KEY(int64_t, id, "id")
+  public:
+    // FIX: Changed from long long to int64_t for better type portability and to fix bad_any_cast issues.
+    cpporm_AUTO_INCREMENT_PRIMARY_KEY(int64_t, id, "id");
 
-      // Changed TEXT to VARCHAR(255) for name and email to allow indexing without prefix length on MySQL
-      cpporm_FIELD_TYPE(std::string, name, "name", "VARCHAR(255)") cpporm_FIELD_TYPE(int, age, "age", "INT") cpporm_FIELD_TYPE(std::string, email, "email", "VARCHAR(255)")
+    // Changed TEXT to VARCHAR(255) for name and email to allow indexing without prefix length on MySQL
+    cpporm_FIELD_TYPE(std::string, name, "name", "VARCHAR(255)");
+    cpporm_FIELD_TYPE(int, age, "age", "INT");
+    cpporm_FIELD_TYPE(std::string, email, "email", "VARCHAR(255)");
 
-          cpporm_TIMESTAMPS(QDateTime)
-      // cpporm_SOFT_DELETE(QDateTime)
+    cpporm_TIMESTAMPS(QDateTime);
+    cpporm_SOFT_DELETE(QDateTime);
 
-      User() = default;
+    User() = default;
 
     void print() const {
         qDebug() << "User - ID:" << id << "Name:" << QString::fromStdString(name) << "Age:" << age << "Email:" << QString::fromStdString(email) << "Created At:" << created_at.toString(Qt::ISODateWithMs)  // Use ISODateWithMs for more precision if needed
                  << "Updated At:" << updated_at.toString(Qt::ISODateWithMs);
     }
 
-    cpporm_MODEL_BEGIN(User, "users") cpporm_UNIQUE_INDEX("uix_users_email", "email") cpporm_INDEX("idx_users_name_age", "name", "age") cpporm_MODEL_END()
+    cpporm_MODEL_BEGIN(User, "users");
+    // cpporm_UNIQUE_INDEX("uix_users_email", "email");
+    cpporm_INDEX("idx_users_name_age", "name", "age") cpporm_MODEL_END()
 };

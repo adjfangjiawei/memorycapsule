@@ -145,21 +145,21 @@ void runCrudOperations(cpporm::Session& session) {
 
     if (!findBobErr && bobForDelete.id > 0) {
         qDebug() << "Found Bob for deletion, ID: " << bobForDelete.id;
-        auto delete_res = session.Delete(bobForDelete);
-        if (delete_res) {
-            qDebug() << "Bob deleted. Rows affected:" << delete_res.value();
-        } else {
-            qCritical() << "Failed to delete Bob:" << QString::fromStdString(delete_res.error().toString());
-        }
-        User deletedBobCheck;
-        err = session.First(&deletedBobCheck, bobForDelete.id);
-        if (err && err.code == cpporm::ErrorCode::RecordNotFound) {
-            qInfo() << "Bob (ID: " << bobForDelete.id << ") correctly not found after deletion.";
-        } else if (!err) {
-            qWarning() << "Unexpected: Bob (ID: " << bobForDelete.id << ") found after attempting deletion.";
-        } else {
-            qWarning() << "Error checking for Bob after deletion:" << QString::fromStdString(err.toString());
-        }
+        // auto delete_res = session.Delete(bobForDelete);
+        // if (delete_res) {
+        //     qDebug() << "Bob deleted. Rows affected:" << delete_res.value();
+        // } else {
+        //     qCritical() << "Failed to delete Bob:" << QString::fromStdString(delete_res.error().toString());
+        // }
+        // User deletedBobCheck;
+        // err = session.First(&deletedBobCheck, bobForDelete.id);
+        // if (err && err.code == cpporm::ErrorCode::RecordNotFound) {
+        //     qInfo() << "Bob (ID: " << bobForDelete.id << ") correctly not found after deletion.";
+        // } else if (!err) {
+        //     qWarning() << "Unexpected: Bob (ID: " << bobForDelete.id << ") found after attempting deletion.";
+        // } else {
+        //     qWarning() << "Error checking for Bob after deletion:" << QString::fromStdString(err.toString());
+        // }
     } else {
         qWarning() << "Could not find Bob by email for deletion. Original ID was" << user2.id << ". Error:" << QString::fromStdString(findBobErr.toString());
     }
@@ -279,19 +279,19 @@ int main(int argc, char* argv[]) {
     runCrudOperations(session);
     runTransactionExample(session);  // Original session should remain usable
 
-    if (session.getDbHandle().isOpen()) {
-        qDebug() << "\n--- Cleaning up ---";
-        auto cleanup_res = session.Model<User>().Where("1=1").Delete();
-        if (cleanup_res) {
-            qDebug() << "Cleaned up users table. Rows affected:" << cleanup_res.value();
-        } else {
-            qWarning() << "Failed to clean up users table:" << QString::fromStdString(cleanup_res.error().toString());
-        }
-    } else {
-        qCritical() << "Main session db_handle is no longer open after transaction example. Cleanup cannot proceed.";
-        // This indicates a problem if the shared_ptr logic didn't work as expected,
-        // or if a transaction error caused the underlying connection to close.
-    }
+    // if (session.getDbHandle().isOpen()) {
+    //     qDebug() << "\n--- Cleaning up ---";
+    //     auto cleanup_res = session.Model<User>().Where("1=1").Delete();
+    //     if (cleanup_res) {
+    //         qDebug() << "Cleaned up users table. Rows affected:" << cleanup_res.value();
+    //     } else {
+    //         qWarning() << "Failed to clean up users table:" << QString::fromStdString(cleanup_res.error().toString());
+    //     }
+    // } else {
+    //     qCritical() << "Main session db_handle is no longer open after transaction example. Cleanup cannot proceed.";
+    //     // This indicates a problem if the shared_ptr logic didn't work as expected,
+    //     // or if a transaction error caused the underlying connection to close.
+    // }
 
     qDebug() << "Database connection" << QString::fromStdString(session.getConnectionName()) << " will be closed when session goes out of scope.";
     qDebug() << "CppOrm MySQL Example Finished.";
